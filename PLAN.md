@@ -58,11 +58,17 @@ Property test: ledger replay always reconstructs identical tree + elevation
 ## [ ] Phase 3a — steward cycle: sync + intake
 go-nostr client work: follows sync with follows.json last-good snapshot
 (never shrink on error, survive restart, only replace with newer kind 3);
-kind-1984 report intake (spam/illegal/malware pubkey bans, `ban-domain:`
+kind-1984 report intake with **ledger source-id dedupe — skip any report
+whose event id already appears as a ledger source, so each report bans
+exactly once, ever** (spam/illegal/malware pubkey bans, `ban-domain:`
 lines; NO kind-5 voids, NO pardon-list sync); react-warding from kind 7
-with watermark; ledger merge; purge-on-ban via the docker-exec strfry
-wrapper (interfaced so tests fake it).
-**Accept:** steward checklist tests for sync/intake/react-warding pass;
+with watermark and the PUBLIC_RELAYS fallback fetch for notes absent
+locally (transient lookup, nothing stored); ledger merge; purge-on-ban via
+the docker-exec strfry wrapper (interfaced so tests fake it).
+**Accept:** steward checklist tests for sync/intake/react-warding pass,
+including the zombie-ban regression test — pardon a pubkey, run two more
+cycles with the old report still on the fixture relay, pubkey stays
+pardoned; a NEW report after the pardon re-bans;
 cycle runs against a scratch strfry in docker-compose with fixture events
 published via nak; banned.json/citizens.json/tree.json come out correct;
 a round-trip test loads steward-written banned.json/citizens.json through
@@ -83,17 +89,20 @@ stack; ward count appears nowhere; name cache populates for tree members
 and contains no ward pubkeys.
 
 ## [ ] Phase 4 — the raid
-Domain re-enumeration + local kind-0 nip05 sweep at raid time (interface
+Domain re-enumeration + local kind-0 nip05 sweep at raid time, **both
+skipping currently-pardoned pubkeys — pardon beats ban, always** (interface
 the `/.well-known/nostr.json` fetcher exactly like the strfry-exec wrapper
 so raid tests fake it — no live HTTP in tests); streaming
 scan-then-delete with the three keep-conditions (citizen, Castle Mail,
 eviction grace); batching; RAID_DRY_RUN honored (default ON); ledger logging
 of purge counts; optional RAID_CRON scheduling + the manual trigger hook the
-API will call.
+API will call. All deletes through the single strfry-CLI wrapper — raid.go
+and the purge step are the only two call sites in the codebase.
 **Accept:** raid checklist tests pass, including "dry run deletes nothing,"
 "stranger-to-stranger gift wrap past TTL deleted, citizen-addressed gift
-wrap survives at any age," and "evicted member's notes survive the grace
-window, die after."
+wrap survives at any age," "evicted member's notes survive the grace
+window, die after," and **"a pardoned pubkey listed in a banned domain's
+well-known survives re-enumeration."**
 
 ## [ ] Phase 5a — HTTP API
 NIP-98 verification (sig, u, method, ±60s, 5-min replay guard), all
@@ -118,7 +127,9 @@ One index.html, < 60KB (the always-strict bytecheck gets wired into the CI
 workflow in this phase), no deps, no build. Public sections per CLAUDE.md: Lord, Court (tree as
 nested <details> with stars), Favored, Citizenry, Vault, Evicted
 (struck-through + expiry, "until the next raid" when manual), Wild West
-("at the Lord's pleasure" when manual), Exiled, NIP-11 footer,
+("at the Lord's pleasure" when manual, days since last raid, and the
+neglect nudge — visible warning when event count or oldest age crosses a
+threshold; the crier shouts, the Lord decides), Exiled, NIP-11 footer,
 copy-relay-URL, njump profile links. Read-only — no sign-in yet; leave a
 placeholder "Enter the castle" button that explains NIP-07.
 **Accept:** renders correctly from steward with real stats.json and
@@ -157,8 +168,13 @@ stock setup intact.
 - Wards in public output = release-blocking bug. Grep public projections in
   tests, not by eye.
 - Keep towncrier's byte budget: `wc -c` in CI, fail over 60KB.
-- steward state is pubkeys, timestamps, admin actions — never event ids. Any
-  feature that wants a stored event id gets written to DECISIONS.md as
-  rejected, not implemented.
+- steward state is pubkeys, timestamps, admin actions. Event ids as
+  PROVENANCE (ban sources, follows-snapshot source) are required; event ids
+  as retention/protection TARGETS are forbidden. Any feature that wants a
+  stored event id as a target gets written to DECISIONS.md as rejected, not
+  implemented.
+- All `strfry delete` calls go through the single strfry-CLI wrapper; only
+  raid.go and the cycle's purge step may call it. A third call site is a
+  design bug, not a convenience.
 - When a decision isn't covered by CLAUDE.md, choose the option with less
   code, and note it in DECISIONS.md.

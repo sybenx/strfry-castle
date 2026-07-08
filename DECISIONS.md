@@ -43,6 +43,10 @@ doesn't cover. Format: date, decision, one-line why.
 - **Random citizen note pulls** ("the castle feels alive": one REQ per cycle
   for a random citizen's recent notes). ~30 lines, harmless traffic, but not
   load-bearing. Considered, deferred.
+- **Medieval office naming for steward modules** (constable/seneschal/
+  bailiff/reeve, from a sibling design fork). Pure theming — the one real
+  safety property under it (delete confinement) was adopted on its own.
+  Rename modules later if the flavor is wanted; zero behavior change.
 - **docker-socket-proxy hardening** (tecnativa/docker-socket-proxy limited
   to exec on the strfry container, replacing the raw socket mount).
   Documented in the README as the hardening option; make it the default if
@@ -66,6 +70,21 @@ doesn't cover. Format: date, decision, one-line why.
 - **internal/stateformat is born in Phase 1, not retrofitted in 3a** —
   stdlib-only shared types for banned.json/citizens.json; refactoring a
   tagged v0.1.0 component mid-project costs more than starting shared.
+- **Report intake is idempotent per report (ledger source-id dedupe)** —
+  removing kind-5 voids created the zombie-ban bug: reports are immortal on
+  relays, so re-reading the same 1984 every cycle re-banned pardoned
+  pubkeys within CYCLE_MINUTES. Each report now bans exactly once, ever;
+  domain re-enumeration and the kind-0 sweep skip pardoned pubkeys. Emergent
+  semantics, intended: pardon beats everything before it, a NEW report is a
+  fresh judgment and re-bans. Caught by a cross-fork review.
+- **`strfry delete` is confined to one wrapper, two call sites** (raid.go +
+  purge-newly-banned). The only irreversible operation gets one choke point
+  where dry-run, batching, and audit logging live. Adopted from the other
+  fork's chain-of-command design, minus the office theming.
+- **Courtyard-neglect nudge uses event count and oldest age, never DB file
+  size** — LMDB never shrinks (deleted pages are reused, the file stays at
+  high-water mark), so `du` on the DB is monotonic and would nudge forever
+  after a thorough raid. File size is an informational footnote at most.
 - **Every ledger line carries `"v":1`** — ledger.jsonl is the durable
   source of truth; one version field turns a future format change into a
   migration instead of a replay break. Replay fails loudly on unknown
@@ -93,3 +112,14 @@ doesn't cover. Format: date, decision, one-line why.
   bucket (30/min, burst 60). Almost certainly invisible at human signing
   rates; if the Lord ever hits it, the fix is elevating the client key or
   raising the bucket, not an exemption code path.
+- **Archiving a ward emits a metadata signal** — the scribe sends
+  `{"authors":[ward]}` REQs to public relays, announcing the castle's
+  interest in that pubkey to third parties. Same obscurity budget as ward
+  privacy generally (declared obscurity-not-cryptography); accepted, but
+  the Lord should know the scribe is the one place the castle actively
+  asks about a ward in public.
+- **The invariant permits provenance event ids** — ban sources and the
+  follows-snapshot source are stored event ids, deliberately. The forbidden
+  thing is event ids as retention/protection TARGETS. Earlier absolute
+  wording ("never event ids") read as self-contradicting; reworded in
+  CLAUDE.md and PLAN.md.

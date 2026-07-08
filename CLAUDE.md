@@ -186,8 +186,12 @@ Env config: `OWNER_PUBKEY` (hex), `STRFRY_CONTAINER`, `PUBLIC_RELAYS`
 
 ### Durable state (the invariant)
 
-**steward state contains pubkeys, timestamps, and admin actions only — never
-event ids. Any feature requiring a stored event id is out of scope.**
+**steward state contains pubkeys, timestamps, and admin actions only. Event
+ids must never be stored as retention or protection TARGETS ("keep this
+note") — any feature that wants one is out of scope. Event ids as
+PROVENANCE (the source of a ban, the kind-3 a follows snapshot came from)
+are not merely permitted but required: they are what makes the ledger
+auditable and intake idempotent.**
 
 - `ledger.jsonl` — append-only, the durable source of truth (Nostr events age
   off relays; never rebuild state purely from live queries). One line per
@@ -207,14 +211,23 @@ event ids. Any feature requiring a stored event id is out of scope.**
 
 1. **Follows sync.** Fetch the Lord's kind 3 (own relay + PUBLIC_RELAYS,
    newest wins). On fetch failure keep previous — never shrink on error.
-2. **Report intake.** Fetch kind 1984 authored by OWNER_PUBKEY. p-tags with
-   report type `spam`, `illegal`, or `malware` → ban pubkey. Content line
+2. **Report intake.** Fetch kind 1984 authored by OWNER_PUBKEY. **Skip any
+   report whose event id already appears as a ledger source — each report
+   bans exactly once, ever.** (Reports are immortal on relays; without this
+   dedupe, a pardoned pubkey is re-banned by the same old report on the
+   next cycle — the zombie-ban bug.) For new reports: p-tags with report
+   type `spam`, `illegal`, or `malware` → ban pubkey. Content line
    `ban-domain: <domain>` → ban domain. Other report types ignored. There is
    NO kind-5 void handling and NO pardon-list sync — undo happens only via
-   the web UI pardon (one undo path, the ledger).
+   the web UI pardon (one undo path, the ledger). A pardon holds against
+   everything that preceded it; a NEW report after a pardon re-bans, which
+   is what a fresh judgment should do.
 3. **React-warding.** Fetch the Lord's kind 7 since the react watermark; ward
-   the authors of reacted notes (resolved from the local relay); bump the
-   watermark.
+   the authors of reacted notes. Resolve each e-tagged note's author from
+   the local relay first; if absent (the Lord reacted to a note that never
+   reached the castle — the common case), fall back to fetching the event
+   from PUBLIC_RELAYS. The fetched event is a transient lookup, discarded
+   after reading its author — nothing stored. Then bump the watermark.
 4. **Ledger & merge.** Effective sets = replay(ledger) + follows. Write
    `banned.json`, `citizens.json`, `tree.json` atomically.
 5. **Purge newly banned.** `strfry delete --filter '{"authors":[...]}'`,
@@ -234,9 +247,12 @@ No other standing network behavior exists.
   `https://<domain>/.well-known/nostr.json` for every banned domain (5s
   timeout, errors ignored), ban every listed pubkey; sweep local kind-0
   events for `nip05` claims of banned domains and ban the claimants.
-  Re-enumeration catches spam farms registering fresh pubkeys under the
-  same domain. NIP-05 is self-asserted; domain bans are a convenience, not a
-  security boundary — pubkey bans are the backbone.
+  **Re-enumeration and the sweep skip currently-pardoned pubkeys — pardon
+  beats ban, always.** Without this, an individually pardoned pubkey on a
+  banned domain is re-banned every raid, forever. Re-enumeration catches
+  spam farms registering fresh pubkeys under the same domain. NIP-05 is
+  self-asserted; domain bans are a convenience, not a security boundary —
+  pubkey bans are the backbone. OWNER_PUBKEY is implicitly pardoned.
 - Web UI provides ban (pubkey or domain) and pardon, Lord only, through the
   same ledger path as report-driven bans.
 
@@ -256,6 +272,23 @@ strfry scan '{"until": cutoff}'   # stream, don't slurp
 (strfry delete filters can't express negation; scan-then-delete is required.)
 Honor `RAID_DRY_RUN`. Log purge counts to the ledger for stats. Raids default
 to manual — "at the Lord's pleasure."
+
+**Delete confinement:** `strfry delete` is the only irreversible operation
+in the system. ALL delete calls go through the single strfry-CLI wrapper,
+and only two call sites may exist: raid.go and the cycle's purge-newly-
+banned step. Dry-run handling, batching, and audit logging live in the
+wrapper, once. No API handler, no scribe path, no future feature grows its
+own delete.
+
+**The crier shouts about neglect:** manual raids must not become silent
+unbounded growth (the resource weight of an unraided courtyard on an Umbrel
+is the problem this project exists to solve). `stats.json` already carries
+the Wild West event count, oldest-event age, and last-raid timestamp;
+towncrier computes "days since last raid" and displays a visible nudge when
+the count or age crosses a threshold. Note: LMDB never shrinks — the DB
+file stays at high-water-mark size after deletion, so file size is at most
+an informational footnote, never the nudge signal. Event count and age are
+the honest metrics.
 
 ### Manual archival (the scribe)
 
@@ -321,8 +354,11 @@ one-line update command. No self-updating machinery in v1 (see DECISIONS.md).
 ONE `index.html`. Vanilla JS, hand-written CSS, dark castle aesthetic, small
 inline SVG castle. No framework, no CDN fonts, no analytics, no build.
 Target < 60KB total, enforced in CI. Everything on the public page is
-information already public via CLI queries — except that wards must never
-appear, in any form, including in counts.
+published by choice — most of it (events, tree-derived facts) is already
+reachable via CLI queries, and the rest (the evicted list, grace expiries)
+is admin state the castle deliberately discloses. This claim is a statement
+of intent, not a privacy proof — and wards must never appear, in any form,
+including in counts.
 
 Public view:
 - **The Lord** — linked npub, resolved name/avatar.
@@ -338,7 +374,9 @@ Public view:
   manual).
 - **The Wild West** — event count, oldest event age, next raid ("at the
   Lord's pleasure" when RAID_CRON is empty, countdown otherwise), last raid's
-  purge count.
+  purge count, days since last raid — and a visible nudge ("the courtyard
+  overflows, my Lord") when the event count or oldest age crosses a
+  threshold. The Lord may neglect his raids; the town crier shouts about it.
 - **The Exiled** — banned pubkey count, banned domains listed by name.
 - Footer: relay URL (click to copy), NIP-11 fields
   (`fetch(origin, {headers:{Accept:'application/nostr+json'}})`), repo link.
@@ -429,16 +467,20 @@ steward uses github.com/nbd-wtf/go-nostr. gatekeeper stays stdlib-only.
   elevation state.
 - elevation: elevated non-member is a citizen; cut-branch favorite keeps
   retention, loses invite rights; visibility flip is one ledger line; ban
-  removes elevation; react-warding wards the reacted author exactly once;
+  removes elevation; react-warding wards the reacted author exactly once,
+  including via the PUBLIC_RELAYS fallback when the note is absent locally;
   wards absent from /api/tree, /api/stats, and all public counts.
 - API: bad NIP-98 sig rejected; stale created_at rejected; replayed event id
   rejected; `u`/`method` mismatch rejected; /api/wards refuses non-Lord;
   every mutation appears in ledger and state files immediately;
   OWNER_PUBKEY unbannable.
 - steward: spam/illegal/malware report bans, nudity report doesn't; pardon
-  via API unbans; follows never shrink on fetch error and survive restart
-  via follows.json; `ban-domain:` convention; raid-time re-enumeration and
-  kind-0 sweep.
+  via API unbans; **a pardoned pubkey stays pardoned across cycles despite
+  the old report persisting on relays (zombie-ban regression test)**; a NEW
+  report after a pardon re-bans; follows never shrink on fetch error and
+  survive restart via follows.json; `ban-domain:` convention; raid-time
+  re-enumeration and kind-0 sweep; **a pardoned pubkey survives domain
+  re-enumeration and the kind-0 sweep**.
 - raid: citizen + elevated + castle mail survive; 31-day stranger note
   deleted; stranger-to-stranger gift wrap older than TTL deleted; gift wrap
   p-tagging a citizen survives at any age; evicted member's notes survive
@@ -459,11 +501,18 @@ steward uses github.com/nbd-wtf/go-nostr. gatekeeper stays stdlib-only.
 - NIP-05 is self-asserted; domain bans are a convenience against lazy spam
   farms, not a security boundary. Pubkey bans are the backbone.
 - The ledger exists because events age off relays; there is no protocol
-  "unreport". Undo is the web UI pardon, one path, through the ledger.
+  "unreport". Undo is the web UI pardon, one path, through the ledger — and
+  because reports are immortal, intake MUST be idempotent per report (ledger
+  source-id dedupe). Pardon beats everything before it; only a new report
+  re-bans.
 - **Thread context and archival-of-everything are delegated to the Lord's
   Chronicle relay. Do not add promotion, context-fetching, or per-event
   protection mechanisms here.** steward state is pubkeys, timestamps, and
-  admin actions only — never event ids.
+  admin actions only; event ids are stored as provenance (required), never
+  as retention or protection targets (forbidden).
+- **`strfry delete` is confined to one wrapper and two call sites** (raid,
+  purge-newly-banned). The only irreversible operation gets exactly one
+  choke point where dry-run, batching, and audit live.
 - **The raid is the moderation.** Spam is not judged, it is outlived. The
   Lord's value judgment is elevation (follow, invite, favorite, ward), not
   ban-chasing. The blacklist is a scalpel for content that can't wait 30
