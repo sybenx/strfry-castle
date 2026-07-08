@@ -48,6 +48,18 @@ doesn't cover. Format: date, decision, one-line why.
   Documented in the README as the hardening option; make it the default if
   the project grows an audience.
 
+## Decided (calls CLAUDE.md didn't make)
+
+- **Ephemeral kinds (20000–29999) are rate-limited like any stranger
+  traffic** — an exemption is a second code path, and the token bucket
+  exists for write-path abuse, which ephemeral floods are. Citizens are
+  already exempt. "Pass through per NIP-16" means strfry doesn't store
+  them; it says nothing about the write path.
+- **Every ledger line carries `"v":1`** — ledger.jsonl is the durable
+  source of truth; one version field turns a future format change into a
+  migration instead of a replay break. Replay fails loudly on unknown
+  versions.
+
 ## Accepted trade-offs (known, intentional)
 
 - **docker.sock mount is root-equivalent** on the host from an
