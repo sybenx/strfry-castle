@@ -14,6 +14,13 @@
 services:
   strfry:
     image: dockurr/strfry:latest
+    # gatekeeper runs as a subprocess of strfry (writePolicy.plugin) and
+    # inherits this container's environment — MAIL_RATE_PER_MIN and
+    # LANDS_RATE_PER_MIN must live here, not on steward, for the knobs in
+    # .env.example to actually reach the plugin.
+    environment:
+      MAIL_RATE_PER_MIN: ${MAIL_RATE_PER_MIN:-10}
+      LANDS_RATE_PER_MIN: ${LANDS_RATE_PER_MIN:-0}
     volumes:
       - strfry-data:/app/strfry-db
       - castle-state:/plugin

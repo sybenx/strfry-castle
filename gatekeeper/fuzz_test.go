@@ -32,11 +32,11 @@ func FuzzProcessLine(f *testing.F) {
 
 	clock := newFakeClock()
 	st := newStore(f.TempDir(), time.Second, clock.now)
-	lim := newLimiter(rateLimitPerMinute, rateBurst, bucketIdleTTL, bucketSweepInterval, clock.now)
+	lims := newTestLimiters(clock, testLandsRatePerMinute)
 
 	f.Fuzz(func(t *testing.T, line string) {
 		var out bytes.Buffer
 		w := bufio.NewWriter(&out)
-		processLine([]byte(line), st, lim, w)
+		processLine([]byte(line), st, lims, w)
 	})
 }

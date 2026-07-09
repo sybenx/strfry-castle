@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,20 +19,27 @@ import (
 
 // Tier order, first match wins (CLAUDE.md's tier table): banned authors are
 // rejected outright; kind 1059/9735 events addressed to a citizen (Castle
-// Mail, judged by recipient) are accepted but still ride the per-IP bucket;
-// citizen-authored events are accepted and exempt from the bucket; anything
-// else is a stranger in the Outer Lands, throttled by the bucket. Ephemeral
-// kinds get no special treatment here — they fall through to the same
-// citizen/stranger split as any other kind (see DECISIONS.md).
+// Mail, judged by recipient) are accepted but always ride the mail bucket;
+// citizen-authored events are accepted and exempt from both buckets;
+// anything else is a stranger in the Outer Lands, throttled by the lands
+// bucket (disabled by default — a firehose). Ephemeral kinds get no special
+// treatment here — they fall through to the same citizen/stranger split as
+// any other kind (see DECISIONS.md).
 const (
-	rateLimitPerMinute  = 30
-	rateBurst           = 60
-	bucketIdleTTL       = 10 * time.Minute
-	bucketSweepInterval = time.Minute
-	defaultPollInterval = time.Second
+	// defaultMailRatePerMinute/defaultLandsRatePerMinute back MAIL_RATE_PER_MIN
+	// and LANDS_RATE_PER_MIN (env-configurable, CLAUDE.md's gatekeeper
+	// section). Mail is the one lane where a stranger earns permanent
+	// storage, so it is always throttled; the outer lands default to
+	// unlimited (0) — the raid is the moderation, not a prefilter.
+	defaultMailRatePerMinute  = 10
+	defaultLandsRatePerMinute = 0
+	bucketIdleTTL             = 10 * time.Minute
+	bucketSweepInterval       = time.Minute
+	defaultPollInterval       = time.Second
 
-	msgBanned    = "blocked: you have been exiled from these lands"
-	msgRateLimit = "rate-limited: the outer lands are crowded"
+	msgBanned         = "blocked: you have been exiled from these lands"
+	msgLandsRateLimit = "rate-limited: the outer lands are crowded"
+	msgMailRateLimit  = "rate-limited: the lord's courier is overburdened"
 )
 
 type pluginRequest struct {
@@ -62,7 +70,9 @@ const stateDir = "/plugin"
 
 func main() {
 	st := newStore(stateDir, defaultPollInterval, time.Now)
-	lim := newLimiter(rateLimitPerMinute, rateBurst, bucketIdleTTL, bucketSweepInterval, time.Now)
+	mailRate := envRate("MAIL_RATE_PER_MIN", defaultMailRatePerMinute)
+	landsRate := envRate("LANDS_RATE_PER_MIN", defaultLandsRatePerMinute)
+	lims := newLimiters(mailRate, landsRate, bucketIdleTTL, bucketSweepInterval, time.Now)
 
 	in := bufio.NewScanner(os.Stdin)
 	in.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -70,15 +80,31 @@ func main() {
 	defer out.Flush()
 
 	for in.Scan() {
-		processLine(in.Bytes(), st, lim, out)
+		processLine(in.Bytes(), st, lims, out)
 	}
+}
+
+// envRate reads a rate-per-minute env var, falling back to def if unset or
+// unparseable (a malformed knob must not crash the plugin — stderr and the
+// default it is).
+func envRate(name string, def float64) float64 {
+	v := os.Getenv(name)
+	if v == "" {
+		return def
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gatekeeper: invalid %s=%q, using default %v: %v\n", name, v, def, err)
+		return def
+	}
+	return f
 }
 
 // processLine handles one line of the strfry plugin protocol: parse,
 // decide, respond. A malformed line is logged to stderr and skipped —
 // never allowed to kill the loop or write anything but a protocol response
 // to stdout.
-func processLine(line []byte, st *store, lim *limiter, out *bufio.Writer) {
+func processLine(line []byte, st *store, lims *limiters, out *bufio.Writer) {
 	var req pluginRequest
 	if err := json.Unmarshal(line, &req); err != nil {
 		fmt.Fprintf(os.Stderr, "gatekeeper: malformed input line: %v\n", err)
@@ -90,7 +116,7 @@ func processLine(line []byte, st *store, lim *limiter, out *bufio.Writer) {
 		return
 	}
 
-	resp := decide(ev, st, lim, req.Source)
+	resp := decide(ev, st, lims, req.Source)
 
 	b, err := json.Marshal(resp)
 	if err != nil {
@@ -102,7 +128,7 @@ func processLine(line []byte, st *store, lim *limiter, out *bufio.Writer) {
 	out.Flush()
 }
 
-func decide(ev pluginEvent, st *store, lim *limiter, source string) pluginResponse {
+func decide(ev pluginEvent, st *store, lims *limiters, source string) pluginResponse {
 	st.refresh()
 
 	if st.isBanned(ev.PubKey) {
@@ -112,11 +138,11 @@ func decide(ev pluginEvent, st *store, lim *limiter, source string) pluginRespon
 	// Castle Mail: judged by recipient, not author (NIP-59 gift wraps use
 	// random one-time signing keys, so author-based rules are blind to
 	// them). Exempt from raid pruning, never from the write-path bucket —
-	// every gift wrap looks stranger-authored, so an unthrottled permanent
-	// write lane would be open to anyone.
+	// mail is the one lane where a stranger earns PERMANENT storage, so it
+	// is the one lane that is ALWAYS throttled, unconditionally.
 	if isCastleMail(ev.Kind) && anyPTagIsCitizen(ev.Tags, st) {
-		if !lim.Allow(source) {
-			return pluginResponse{ID: ev.ID, Action: "reject", Msg: msgRateLimit}
+		if !lims.mail.Allow(source) {
+			return pluginResponse{ID: ev.ID, Action: "reject", Msg: msgMailRateLimit}
 		}
 		return pluginResponse{ID: ev.ID, Action: "accept"}
 	}
@@ -126,9 +152,10 @@ func decide(ev pluginEvent, st *store, lim *limiter, source string) pluginRespon
 	}
 
 	// Outer Lands: everyone else, including ephemeral-kind traffic (no
-	// exemption — see DECISIONS.md).
-	if !lim.Allow(source) {
-		return pluginResponse{ID: ev.ID, Action: "reject", Msg: msgRateLimit}
+	// exemption — see DECISIONS.md). The lands bucket is off by default
+	// (firehose); the raid, not a prefilter, is the moderation.
+	if !lims.allowLands(source) {
+		return pluginResponse{ID: ev.ID, Action: "reject", Msg: msgLandsRateLimit}
 	}
 	return pluginResponse{ID: ev.ID, Action: "accept"}
 }
@@ -289,9 +316,37 @@ func (s *store) isCitizen(pk string) bool {
 	return ok
 }
 
-// limiter is a per-key (per-IP) token bucket for all non-citizen-authored
-// write traffic, Castle Mail included. Idle buckets are swept periodically
-// so unbounded IP churn doesn't grow memory forever.
+// limiters holds the two per-IP token buckets CLAUDE.md calls for: mail is
+// always on (Castle Mail is the one lane where a stranger earns permanent
+// storage); lands is nil when LANDS_RATE_PER_MIN <= 0, meaning "disabled" —
+// the Outer Lands are a firehose by default, and the raid is the
+// moderation, not a prefilter.
+type limiters struct {
+	mail  *limiter
+	lands *limiter
+}
+
+func newLimiters(mailRatePerMinute, landsRatePerMinute float64, idleTTL, sweepEvery time.Duration, now func() time.Time) *limiters {
+	ls := &limiters{
+		mail: newLimiter(mailRatePerMinute, mailRatePerMinute*2, idleTTL, sweepEvery, now),
+	}
+	if landsRatePerMinute > 0 {
+		ls.lands = newLimiter(landsRatePerMinute, landsRatePerMinute*2, idleTTL, sweepEvery, now)
+	}
+	return ls
+}
+
+// allowLands reports whether a lands-bucket event may proceed. A nil lands
+// bucket means the knob is at its default (0 = unlimited): always allow.
+func (l *limiters) allowLands(source string) bool {
+	if l.lands == nil {
+		return true
+	}
+	return l.lands.Allow(source)
+}
+
+// limiter is a per-key (per-IP) token bucket. Idle buckets are swept
+// periodically so unbounded IP churn doesn't grow memory forever.
 type limiter struct {
 	rate       float64 // tokens per second
 	burst      float64
