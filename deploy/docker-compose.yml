@@ -4,12 +4,20 @@
 # stack (see DECISIONS.md, "install.sh editing strfry.conf / compose /
 # proxy configs" — rejected).
 #
-# It is also used as-is by `make smoke` for a scratch stack.
-#
 # strfry itself is expected to already exist in the target stack; the only
 # strfry-side changes needed are: mount the castle-state volume at
 # /plugin/, and set writePolicy.plugin = "/plugin/gatekeeper" in
 # strfry.conf (see strfry.conf.patch).
+#
+# NOTE (found via Phase 1 remediation's real-Docker verification):
+# strfry.conf.patch is a FRAGMENT for hand-merging into an existing
+# strfry.conf, not a complete one — it has no db/dbParams/events/bind
+# stanzas. dockurr/strfry reads its config from /etc/strfry.conf (or
+# $STRFRY_CONFIG), never /app/strfry.conf, so the mount below is at the
+# right path but the file it mounts still isn't a bootable config by
+# itself. A real scratch-stack strfry (for `make smoke`'s eventual
+# gatekeeper assertions) needs a full generated strfry.conf; that's
+# Phase 3a work, tracked there, not solved by this compose file yet.
 
 services:
   strfry:
@@ -24,7 +32,7 @@ services:
     volumes:
       - strfry-data:/app/strfry-db
       - castle-state:/plugin
-      - ./strfry.conf.patch:/app/strfry.conf:ro
+      - ./strfry.conf.patch:/etc/strfry.conf:ro
     ports:
       - "7777:7777"
 

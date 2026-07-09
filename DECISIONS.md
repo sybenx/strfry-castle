@@ -84,11 +84,12 @@ doesn't cover. Format: date, decision, one-line why.
   pinned by `TestDecide_EphemeralStrangerRidesBucket`, which must run with
   the lands bucket ENABLED, since at the default it is unlimited. The
   premise this rests on — that strfry actually invokes the write-policy
-  plugin for ephemeral-kind events at all — is still UNVERIFIED: the
-  Phase 1 session had no Docker available, so the real-strfry confirmation
-  PLAN.md calls for did not happen. See `.claude/notes/phase1.md`. Whoever
-  gets Docker next must run it before trusting this line, per PLAN.md's own
-  instruction to drop the pinning test if the premise turns out false.
+  plugin for ephemeral-kind events at all — is CONFIRMED: verified against
+  a real dockurr/strfry container in Phase 1 remediation's Docker debt
+  payoff (REMEDIATION.md Step 2). A kind-20001 event authored by a banned
+  pubkey came back rejected with gatekeeper's exact themed message, proving
+  strfry calls the plugin for ephemeral kinds same as any other. The
+  pinning test stands. See `.claude/notes/phase1.md`.
 - **bytecheck is strict from day one; phasing lives in CI wiring, not
   Makefile logic** — a "not yet built, exit 0" soft mode is a conditional
   that outlives its purpose: after Phase 6a a missing index.html would
