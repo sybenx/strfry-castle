@@ -1,144 +1,114 @@
 # PLAN.md — build plan for the Castle
 
 Read CLAUDE.md first; it is the spec and the source of truth. This file is
-the order of operations. Work one phase per session where possible; Phases
-3, 5, and 6 are pre-split because they won't fit in one. Every phase ends with its
-tests green and a commit. Do not start a phase until the previous phase's
-acceptance criteria pass. Check off each phase here (`[x]`) when accepted.
-Resist adding anything not in the spec — light as a whip.
+the order of operations. Work one phase per session where possible. Every
+phase ends with its tests green and a commit. Do not start a phase until
+the previous phase's acceptance criteria pass. Check off each phase here
+(`[x]`) when accepted. Resist adding anything not in the spec — light as a
+whip.
 
-## [x] Phase 0 — Skeleton (30 min)
-Repo layout per CLAUDE.md, Go module, Makefile (build/test/smoke/bytecheck,
-cross-compile linux/amd64 + linux/arm64; bytecheck is strict from day one —
-missing towncrier/index.html is a FAILURE, >60KB is a failure; it simply
-isn't wired into CI until Phase 6a, so the guard has one behavior and can
-never rot into a no-op), .env.example (RAID_DRY_RUN=true,
-RAID_CRON empty, LANDS_RATE_PER_MIN=0, MAIL_RATE_PER_MIN=10), empty test files, stub main.go for gatekeeper and steward
-(so `make build` and the CI static-binary assertion have something to
-compile from day one), seeded DECISIONS.md, CI workflow that
-runs `make test` on push and asserts both gatekeeper binaries are static
-(`ldd` says "not a dynamic executable").
-**Accept:** `make build` produces static binaries for both arches; CI green
-on a trivial test including the static check.
+**History note:** the project was re-scoped mid-build (after Phase 3a).
+The write-policy plugin (gatekeeper), bans/report intake, Castle Mail,
+rate buckets, react-warding, domain bans, the scribe, byte
+accounting/gates, and NIP-05 serving were all cut — see DECISIONS.md,
+which records each with its revert path. Phase numbers below keep their
+original identities so old commits and notes still make sense; Phase 1 is
+struck rather than renumbered away.
 
-## [x] Phase 1 — gatekeeper (the plugin)
-Pure stdlib. stdin/stdout JSONL loop, hashset checks against banned.json /
-citizens.json, Castle Mail recipient rule (pruning-exempt, but mail rides its own
-always-on tight bucket — every gift wrap looks stranger-authored; pin with
-a test), the two per-IP token buckets with idle eviction (mail always on,
-default 10/min; lands OFF by default — pin that LANDS_RATE_PER_MIN=0
-passes a firehose untouched), mtime hot reload with injectable poll interval, fail-open on
-missing files, malformed-line resilience, a native fuzz target on the stdin
-loop, themed reject messages. Ephemeral kinds (20000–29999) from
-non-citizens get stranger treatment — the lands bucket, no special case
-(see DECISIONS.md); pin this with a test run with the lands bucket enabled,
-since at the default it is unlimited. The banned.json/citizens.json format
-types are born in a shared, stdlib-only internal package (e.g.
-internal/stateformat) so Phase 3a's writers and gatekeeper's reader can
-never drift — creating it now beats refactoring a tagged v0.1.0 later.
-Committed fixtures in gatekeeper/testdata/. Unit tests for every gatekeeper
-row of the CLAUDE.md checklist.
-**Accept:** all gatekeeper checklist tests pass; fuzz target runs clean for
-30s; manual smoke against an ad-hoc local strfry in docker accepts a citizen
-event, rejects a banned one, and CONFIRMS strfry routes an ephemeral-kind
-event through the write policy at all (the DECISIONS.md rate-limit call
-assumes it; if strfry never invokes the plugin for ephemeral kinds, note
-that in DECISIONS.md and drop the pinning test). Commit + tag v0.1.0.
+## [x] Phase 0 — Skeleton
+Repo layout, Go module, Makefile (build/test/smoke/bytecheck, cross-compile
+linux/amd64 + linux/arm64; bytecheck is strict from day one — missing
+towncrier/index.html is a FAILURE, >60KB is a failure; wired into CI in
+Phase 6a), .env.example, CI workflow running `make test` and asserting the
+binaries are static.
+
+## [x] Phase 1 — gatekeeper *(built, then removed in Phase D)*
+Shipped as v0.1.0/v0.1.1; removed at re-scope. Lives in git history if
+write-path policy ever returns.
 
 ## [x] Phase 2 — steward core: ledger, tree, elevation (no network)
-ledger.jsonl append/replay with all verbs (invite/remove/ennoble/ban/pardon/
-ban-domain/pardon-domain/elevate/lower/flip-visibility/archive-run/raid-run);
-every ledger line carries `"v":1` from the very first write (one field of
-insurance: a future format change becomes a migration, not a replay break;
-replay rejects unknown versions loudly);
-tree.go with invite/remove/ennoble/ban-cuts-branch, MAX_INVITES/MAX_DEPTH;
-elevation.go (one set + visibility flag, ban-beats-elevation, no
-reparenting); eviction timestamps recorded on removal; citizens
-recomputation ({Lord} ∪ tree ∪ follows ∪ elevated); atomic state-file
-writers (temp in same dir + rename). Pure logic — test exhaustively now.
-Property test: ledger replay always reconstructs identical tree + elevation
-+ ban state.
-**Accept:** all tree + elevation + ledger checklist tests pass, including
-"wards absent from every public projection."
+ledger.jsonl append/replay, `"v":1` on every line, tree.go with
+invite/remove/ennoble + MAX_INVITES/MAX_DEPTH, elevation.go, eviction
+timestamps, citizens recomputation, atomic state-file writers, the replay
+property test.
 
-## [x] Phase 3a — steward cycle: sync + intake
+## [x] Phase 3a — steward cycle: follows sync
 go-nostr client work: follows sync with follows.json last-good snapshot
 (never shrink on error, survive restart, only replace with newer kind 3);
-kind-1984 report intake with **ledger source-id dedupe — skip any report
-whose event id already appears as a ledger source, so each report bans
-exactly once, ever** (spam/illegal/malware pubkey bans, `ban-domain:`
-lines; NO kind-5 voids, NO pardon-list sync); react-warding from kind 7
-with watermark and the PUBLIC_RELAYS fallback fetch for notes absent
-locally (transient lookup, nothing stored); ledger merge; purge-on-ban via
-the docker-exec strfry wrapper (interfaced so tests fake it).
-**Accept:** steward checklist tests for sync/intake/react-warding pass,
-including the zombie-ban regression test — pardon a pubkey, run two more
-cycles with the old report still on the fixture relay, pubkey stays
-pardoned; a NEW report after the pardon re-bans;
-cycle runs against a scratch strfry in docker-compose with fixture events
-published via nak; banned.json/citizens.json/tree.json come out correct;
-a round-trip test loads steward-written banned.json/citizens.json through
-gatekeeper's actual parser via the shared internal/stateformat package
-created in Phase 1 (stdlib-only, so gatekeeper's constraint holds; this
-kills fixture/writer drift between Phase 1's hand-written fixtures and the
-real writers).
+ledger merge; atomic state writes.
+*(As built, this phase also included report intake, react-warding, and
+purge-on-ban — all removed in Phase D.)*
+
+## [x] Phase D — the demolition (do this NOW, before finishing 3b)
+Remove everything the re-scope cut. One session, mostly deletion:
+- Delete `gatekeeper/` (source, testdata, fuzz target), its Makefile
+  targets, and its CI static-binary assertion (keep steward's). Fold
+  `internal/stateformat` into the steward package if nothing else imports
+  it — or leave it if folding causes churn; less code wins.
+- Delete from steward: report intake (kind-1984 fetch, source-id dedupe,
+  zombie-ban regression machinery), react-warding (kind-7 fetch, watermark,
+  PUBLIC_RELAYS note lookup), purge-on-ban (the wrapper's second call
+  site), ban/pardon/ban-domain/pardon-domain ledger verbs and their tree
+  interactions (VerbBan branch-cut, `State.Citizens` banned-exclusion),
+  `banned.json` writer, all mail/lands bucket references.
+- Ledger replay now rejects the removed verbs loudly (unknown verb =
+  loud failure, same rule as unknown version). Dev-only ledgers with old
+  verbs are deleted, not migrated.
+- `.env.example`: drop MAIL_RATE_PER_MIN, LANDS_RATE_PER_MIN,
+  NIP05_DOMAIN. Keep the CLAUDE.md env list exactly.
+- deploy/: drop the strfry.conf patch and the /plugin volume from the
+  compose fragment; steward keeps state volume + docker.sock only.
+- Delete every test pinning removed behavior; re-run the FULL remaining
+  suite.
+**Accept:** `make build` produces static steward only; `make test` green;
+`grep -ri "gatekeeper\|banned\|1984\|gift wrap\|bucket" steward/` returns
+only DECISIONS/CLAUDE references, no live code. Commit "the demolition",
+tag v0.2.0.
 
 ## [ ] Phase 3b — stats, name cache, update check
-stats.json per the schema (public counts exclude wards; raids.next null when
-manual), batched `strfry scan --count`, daily GitHub release check feeding
-`version` in stats.json. Kind-0 name/avatar cache for tree members, public favorites, and evicted
-members inside their grace window (fetch from local relay first,
-PUBLIC_RELAYS as fallback; atomic cache file; lazy refresh with a staleness
-threshold; never wards). Phase
-5a's /api/tree only READS this cache; the network code lives here.
+stats.json per the CLAUDE.md schema (public counts exclude wards;
+raids.next null when manual), batched `strfry scan --count`, daily GitHub
+release check feeding `version` in stats.json. Kind-0 name/avatar cache
+for tree members, public favorites, and evicted members inside their grace
+window (local relay first, PUBLIC_RELAYS fallback; atomic cache file; lazy
+refresh with staleness threshold; never wards). Phase 5's /api/tree only
+READS this cache; the network code lives here.
 **Accept:** stats.json validates against the schema from a live compose
 stack; ward count appears nowhere; name cache populates for tree members
 and public favorites and contains no ward pubkeys.
 
 ## [ ] Phase 4 — the raid
-Domain re-enumeration + local kind-0 nip05 sweep at raid time, **both
-skipping currently-pardoned pubkeys — pardon beats ban, always** (interface
-the `/.well-known/nostr.json` fetcher exactly like the strfry-exec wrapper
-so raid tests fake it — no live HTTP in tests); streaming
-scan-then-delete with the three keep-conditions (citizen, Castle Mail,
-eviction grace); batching; RAID_DRY_RUN honored (default ON); ledger logging
-of purge counts; optional RAID_CRON scheduling + the manual trigger hook the
-API will call. All deletes through the single strfry-CLI wrapper — raid.go
-and the purge step are the only two call sites in the codebase.
-**Accept:** raid checklist tests pass, including "dry run deletes nothing,"
-"stranger-to-stranger gift wrap past TTL deleted, citizen-addressed gift
-wrap survives at any age," "evicted member's notes survive the grace
-window, die after," and **"a pardoned pubkey listed in a banned domain's
-well-known survives re-enumeration."**
+Streaming scan-then-delete with the two keep-conditions (citizen, eviction
+grace); the per-raid ttl_days override with clamp (≥1, else 400) and
+grace-decoupling (grace ALWAYS uses OUTER_TTL_DAYS); dry-run-as-preview
+returning `{events}`; batching; RAID_DRY_RUN honored (default ON); ledger
+raid-run line records purge count + ttl used + override-or-default;
+optional RAID_CRON scheduling (always default TTL) + the manual trigger
+hook the API will call. All deletes through the single strfry-CLI wrapper —
+raid.go is the ONLY call site in the codebase.
+**Accept:** raid checklist rows in CLAUDE.md all pass, including "dry run
+deletes nothing and returns nonzero events," "evicted member survives the
+grace window, dies after," "grace survives a smaller override," "override
+respected / absent uses default / 0 rejected / ledger records ttl."
 
-## [ ] Phase 5a — HTTP API
+## [ ] Phase 5 — HTTP API
 NIP-98 verification (sig, u, method, ±60s, 5-min replay guard), all
 endpoints from CLAUDE.md including /api/wards (Lord only), /api/elevate,
-/api/lower, /api/archive, /api/raid; immediate state rewrite on mutation;
-per-IP rate limit; same-origin CORS; static file serving for towncrier (a placeholder
-index.html until Phase 6a);
-NIP-05 serving when NIP05_DOMAIN is set.
-**Accept:** API checklist tests pass; curl + nak-signed headers can invite,
-remove, elevate, ban, pardon, and trigger a dry-run raid end-to-end against
-the compose stack; /api/wards refuses a non-Lord signature.
-
-## [ ] Phase 5b — the scribe
-POST /api/archive one-shot job: paginated REQ backfill (until-cursor,
-limit 500, polite pacing, backoff on CLOSED), replay into the castle over a
-local websocket, one job at a time, own goroutine/failure domain, counts
-logged to ledger.
-**Accept:** scribe checklist tests pass against a fixture relay; killing the
-scribe mid-job leaves the cycle untouched.
+/api/lower, /api/raid (with ttl_days + dry_run body); immediate state
+rewrite on mutation; per-IP rate limit; same-origin CORS; static file
+serving for towncrier (placeholder index.html until Phase 6a).
+**Accept:** API checklist tests pass; curl + nak-signed headers can
+invite, remove, ennoble, elevate, lower, and trigger a dry-run raid
+end-to-end against the compose stack; /api/wards refuses a non-Lord
+signature.
 
 ## [ ] Phase 6a — towncrier: the public page
-One index.html, < 60KB (the always-strict bytecheck gets wired into the CI
-workflow in this phase), no deps, no build. Public sections per CLAUDE.md: Lord, Court (tree as
-nested <details> with stars), Favored, Citizenry, Vault, Evicted
-(struck-through + expiry, "until the next raid" when manual), Outer Lands
-("at the Lord's pleasure" when manual, days since last raid, and the
-neglect nudge — visible warning when event count or oldest age crosses a
-threshold; the crier shouts, the Lord decides), Exiled, NIP-11 footer,
-copy-relay-URL, njump profile links. Read-only — no sign-in yet; leave a
+One index.html, < 60KB (bytecheck wired into CI this phase), no deps, no
+build. Public sections per CLAUDE.md: Lord, Court (nested <details> with
+stars), Favored, Citizenry, Evicted (struck-through + expiry, "until the
+next raid" when manual), Outer Lands (count, oldest age, days since last
+raid, "at the Lord's pleasure" when manual), the ephemeral-DMs note,
+NIP-11 footer, copy-relay-URL, njump profile links. Read-only — a
 placeholder "Enter the castle" button that explains NIP-07.
 **Accept:** renders correctly from steward with real stats.json and
 /api/tree; no ward data appears anywhere in the page or the responses it
@@ -147,42 +117,42 @@ budget in CI.
 
 ## [ ] Phase 6b — towncrier: the NIP-07 layer
 Sign-in, member invite/remove with branch-fall confirm, full Lord controls
-including inline star toggles, ban/pardon with domain field, archive
-buttons, raid-now, update banner, double-confirm on banning the elevated,
-and the Lord-only Wards section fed exclusively by authenticated
-/api/wards (add npub, lower, visibility flip, react-ward sources shown).
+including inline star toggles, ennoble, the raid control (days input
+pre-filled with OUTER_TTL_DAYS → Preview → confirm dialog stating "purge
+stranger events older than N days — N events" → raid), update banner, and
+the Lord-only Wards section fed exclusively by authenticated /api/wards
+(add npub, lower, visibility flip).
 **Accept:** a NIP-07 extension performs an invite and a ward-add in a
 browser; a non-Lord sign-in shows no ward UI and no ward data appears in
 any response it can trigger; still under the byte budget in CI.
 
 ## [ ] Phase 7 — distribution
-Release workflow (binaries + checksums + ghcr multi-arch image), install.sh
-(print-don't-edit for strfry.conf / compose / proxy), uninstall.sh, README
-with screenshot and the docker.sock disclosure. Test install.sh against a
-clean container running a stock strfry compose stack.
+Release workflow (binary + checksums + ghcr multi-arch image), install.sh
+(print-don't-edit for compose / proxy configs; no strfry.conf involvement
+at all now), uninstall.sh, README with screenshot, the docker.sock
+disclosure, and the free-writePolicy-slot note for spam plugins. Test
+install.sh against a clean container running a stock strfry compose stack.
 **Accept:** following install.sh's printed instructions on a fresh box
-yields a working castle with manual dry-run raids; with the printed proxy
-config applied, the smoke test verifies the real-IP header reaches
-gatekeeper (two client IPs get independent mail-bucket allowances — per
-CLAUDE.md, without the real IP the limiter is a no-op or a self-DoS); uninstall leaves the
+yields a working castle with manual dry-run raids; uninstall leaves the
 stock setup intact.
 
 ## Standing orders
-- After any change to tier or elevation logic, re-run the full gatekeeper
-  fixture suite AND the elevation privacy tests.
-- Never write to stdout in gatekeeper except protocol responses.
-- Never let a network failure shrink citizens or forget bans (ledger +
-  follows.json are truth).
-- Wards in public output = release-blocking bug. Grep public projections in
-  tests, not by eye.
+- After any change to elevation logic, re-run the elevation privacy tests.
+- Never let a network failure shrink citizens (ledger + follows.json are
+  truth).
+- Wards in public output = release-blocking bug. Grep public projections
+  in tests, not by eye.
 - Keep towncrier's byte budget: `wc -c` in CI, fail over 60KB.
 - steward state is pubkeys, timestamps, admin actions. Event ids as
-  PROVENANCE (ban sources, follows-snapshot source) are required; event ids
-  as retention/protection TARGETS are forbidden. Any feature that wants a
-  stored event id as a target gets written to DECISIONS.md as rejected, not
-  implemented.
-- All `strfry delete` calls go through the single strfry-CLI wrapper; only
-  raid.go and the cycle's purge step may call it. A third call site is a
-  design bug, not a convenience.
+  PROVENANCE (the follows-snapshot source) are required; event ids as
+  retention/protection TARGETS are forbidden. Any feature that wants a
+  stored event id as a target gets written to DECISIONS.md as rejected,
+  not implemented.
+- All `strfry delete` calls go through the single strfry-CLI wrapper;
+  raid.go is the only permitted call site. A second call site is a design
+  bug, not a convenience.
+- The castle never gates writes. Any feature that wants a write-path
+  decision gets written to DECISIONS.md as rejected and pointed at the
+  free writePolicy slot.
 - When a decision isn't covered by CLAUDE.md, choose the option with less
   code, and note it in DECISIONS.md.

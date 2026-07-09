@@ -1,7 +1,7 @@
 # Printed by install.sh, never applied automatically (see DECISIONS.md).
 # Route WebSocket upgrades and NIP-11 requests to strfry; everything else
-# (towncrier, /api, /.well-known/nostr.json) to steward. Forward the real
-# client IP so gatekeeper's rate limiter is meaningful.
+# (towncrier, /api) to steward. Forward the real client IP so steward's
+# per-IP API rate limit sees real clients.
 
 your-relay-domain.example {
 	@websocket {
@@ -22,6 +22,5 @@ your-relay-domain.example {
 		reverse_proxy steward:8787
 	}
 
-	# Caddy sets X-Forwarded-For by default; make sure strfry.conf's
-	# relay.realIpHeader matches (see strfry.conf.patch).
+	# Caddy sets X-Forwarded-For by default.
 }

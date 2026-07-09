@@ -1,11 +1,10 @@
-// Command steward is the Castle's sidecar daemon: follows sync, report
-// intake, raids, the invite tree, elevation, manual archival, the signed
-// HTTP API, NIP-05 serving, and stats. It also serves towncrier's static
-// files, so there is no separate web container. See CLAUDE.md, Component 2.
+// Command steward is the Castle's sidecar daemon: follows sync, raids, the
+// invite tree, elevation, the signed HTTP API, and stats. It also serves
+// towncrier's static files, so there is no separate web container. See
+// CLAUDE.md, Component 2.
 //
-// As of Phase 3a this runs the cycle loop (follows sync, report intake,
-// react-warding, ledger merge, purge-newly-banned). The HTTP API, raid, and
-// scribe land in Phases 4-5.
+// As of Phase 3a this runs the cycle loop (follows sync, ledger merge). The
+// HTTP API and raid land in Phases 4-5.
 package main
 
 import (
@@ -32,7 +31,6 @@ type config struct {
 	RaidDryRun      bool
 	MaxInvites      int
 	MaxDepth        int
-	Nip05Domain     string
 	Listen          string
 }
 
@@ -47,7 +45,6 @@ func loadConfig() (config, error) {
 		RaidDryRun:      envBool("RAID_DRY_RUN", true),
 		MaxInvites:      envInt("MAX_INVITES", 5),
 		MaxDepth:        envInt("MAX_DEPTH", 4),
-		Nip05Domain:     os.Getenv("NIP05_DOMAIN"),
 		Listen:          envOr("LISTEN", ":8787"),
 	}, nil
 }
@@ -105,17 +102,16 @@ func envBool(key string, def bool) bool {
 }
 
 // ownRelayURL is steward's local websocket address for STRFRY_CONTAINER.
-// Not a separate env var: steward and gatekeeper already share the same
-// trust source for "which strfry" (STRFRY_CONTAINER is also the docker-exec
-// target), and strfry listens on 7777 on the compose network by convention
-// (see deploy/docker-compose.yml). One knob, not two.
+// Not a separate env var: STRFRY_CONTAINER is also the docker-exec target,
+// and strfry listens on 7777 on the compose network by convention (see
+// deploy/docker-compose.yml). One knob, not two.
 func ownRelayURL(container string) string {
 	return fmt.Sprintf("ws://%s:7777", container)
 }
 
 // writeJSONAtomic marshals v and writes it to path via a temp file in the
 // same directory followed by a rename, so a crash mid-write never leaves a
-// truncated state file for gatekeeper (or another reader) to hot-reload.
+// truncated state file for another reader to hot-reload.
 func writeJSONAtomic(path string, v interface{}) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -153,7 +149,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cycle := NewCycle(cfg, relayFetcher{}, &dockerStrfryCLI{Container: cfg.StrfryContainer})
+	cycle := NewCycle(cfg, relayFetcher{})
 
 	runCycle := func() {
 		if err := cycle.Run(ctx); err != nil {

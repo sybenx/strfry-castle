@@ -9,8 +9,6 @@ build:
 	@set -e; \
 	for platform in $(PLATFORMS); do \
 		os=$${platform%/*}; arch=$${platform#*/}; \
-		echo "==> building gatekeeper $$os/$$arch"; \
-		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -o $(BIN_DIR)/$$os-$$arch/gatekeeper ./gatekeeper; \
 		echo "==> building steward $$os/$$arch"; \
 		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -o $(BIN_DIR)/$$os-$$arch/steward ./steward; \
 	done
@@ -19,9 +17,8 @@ test:
 	go vet ./...
 	go test ./...
 
-# Scratch strfry + fixture events via nak. Grows real assertions in Phase 1
-# (gatekeeper accept/reject) and Phase 3a (cycle output against a compose
-# stack); the harness itself lives in deploy/smoke.sh.
+# Scratch strfry + fixture events via nak, exercising a real steward cycle
+# end to end; the harness itself lives in deploy/smoke.sh.
 smoke: build
 	./deploy/smoke.sh
 

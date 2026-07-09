@@ -1,6 +1,6 @@
 // The ledger: ledger.jsonl append/replay, the durable source of truth for
-// invites, removals, bans, pardons, elevation, and raid/archive runs. Every
-// line carries "v":1. Lands in Phase 2.
+// invites, removals, elevation, and raid runs. Every line carries "v":1.
+// Lands in Phase 2.
 // See CLAUDE.md, "Durable state (the invariant)".
 package main
 
@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"os"
 	"sort"
-
-	"github.com/sybenx/castle-for-strfry-experiment/internal/stateformat"
 )
 
 const ledgerVersion = 1
@@ -22,14 +20,9 @@ const (
 	VerbInvite         = "invite"
 	VerbRemove         = "remove"
 	VerbEnnoble        = "ennoble"
-	VerbBan            = "ban"
-	VerbPardon         = "pardon"
-	VerbBanDomain      = "ban-domain"
-	VerbPardonDomain   = "pardon-domain"
 	VerbElevate        = "elevate"
 	VerbLower          = "lower"
 	VerbFlipVisibility = "flip-visibility"
-	VerbArchiveRun     = "archive-run"
 	VerbRaidRun        = "raid-run"
 )
 
@@ -42,14 +35,20 @@ type Entry struct {
 	Timestamp int64  `json:"ts"`
 	Source    string `json:"source"`
 
-	Pubkey    string `json:"pubkey,omitempty"`     // invite/remove/ennoble/ban/pardon/elevate/lower/flip-visibility/archive-run (target)
+	Pubkey    string `json:"pubkey,omitempty"`     // invite/remove/ennoble/elevate/lower/flip-visibility (target)
 	InvitedBy string `json:"invited_by,omitempty"` // invite
 	Label     string `json:"label,omitempty"`      // invite
-	Domain    string `json:"domain,omitempty"`     // ban-domain/pardon-domain
 	Public    bool   `json:"public,omitempty"`     // elevate/flip-visibility
-	Count     int    `json:"count,omitempty"`      // archive-run
 	Purged    int    `json:"purged,omitempty"`     // raid-run
 	DryRun    bool   `json:"dry_run,omitempty"`    // raid-run
+}
+
+// Citizens is the shape of citizens.json: the effective citizenry (Lord ∪
+// tree members ∪ follows ∪ elevated, including wards — this file is a
+// shared-volume file, never an API response, so ward inclusion here does
+// not violate the ward privacy invariant). It carries no visibility info.
+type Citizens struct {
+	Pubkeys []string `json:"pubkeys"`
 }
 
 // AppendLedger appends one entry to path, stamping the current ledger
@@ -102,30 +101,23 @@ func ReadLedger(path string) ([]Entry, error) {
 }
 
 var (
-	ErrOwnerUnbannable = errors.New("ledger: OWNER_PUBKEY cannot be banned")
-	ErrTargetBanned    = errors.New("ledger: target is banned, pardon first")
-	ErrNoChange        = errors.New("ledger: no-op, nothing changed")
-	ErrUnknownVerb     = errors.New("ledger: unknown verb")
+	ErrNoChange    = errors.New("ledger: no-op, nothing changed")
+	ErrUnknownVerb = errors.New("ledger: unknown verb")
 )
 
 // State is the full replayed-from-ledger domain state: the invite tree,
-// elevation records, ban sets, and eviction timestamps (grace-window
-// starts for members who lost citizenship by removal, not by ban — see
-// Apply's VerbBan case). It is a materialized view; BuildState always
-// reconstructs it fresh from a ledger.
+// elevation records, and eviction timestamps (grace-window starts for
+// members who lost citizenship by removal — see Apply's VerbRemove case).
+// It is a materialized view; BuildState always reconstructs it fresh from
+// a ledger.
 type State struct {
 	Owner      string
 	MaxInvites int
 	MaxDepth   int
 	Tree       *Tree
 	Elevation  *Elevation
-	Bans       *Bans
 	// Evicted maps a pubkey to the timestamp its citizenship ended via
-	// removal (tree cut or ban-cut subtree member), for the raid's grace
-	// window. Banned pubkeys themselves are excluded: bans purge
-	// immediately (CLAUDE.md: "Explicit bans DO purge immediately — that
-	// is the difference between exile and outlawry"), so they are never
-	// grace-eligible.
+	// removal (tree cut), for the raid's grace window.
 	Evicted map[string]int64
 }
 
@@ -136,7 +128,6 @@ func NewState(owner string, maxInvites, maxDepth int) *State {
 		MaxDepth:   maxDepth,
 		Tree:       NewTree(owner),
 		Elevation:  NewElevation(),
-		Bans:       NewBans(),
 		Evicted:    make(map[string]int64),
 	}
 }
@@ -160,7 +151,7 @@ func BuildState(owner string, entries []Entry, maxInvites, maxDepth int) (*State
 // appended (that's the job of the State.* mutation methods below); it
 // enforces only invariants that must hold no matter how an entry was
 // produced, including during replay of a persisted ledger — e.g. the tree's
-// MAX_INVITES/MAX_DEPTH shape limits, and OWNER_PUBKEY's unbannability.
+// MAX_INVITES/MAX_DEPTH shape limits.
 func (s *State) Apply(e Entry) error {
 	switch e.Verb {
 	case VerbInvite:
@@ -179,38 +170,6 @@ func (s *State) Apply(e Entry) error {
 	case VerbEnnoble:
 		return s.Tree.Ennoble(e.Pubkey, e.Timestamp)
 
-	case VerbBan:
-		if e.Pubkey == s.Owner {
-			return ErrOwnerUnbannable
-		}
-		s.Bans.ban(e.Pubkey)
-		s.Elevation.lower(e.Pubkey)
-		if s.Tree.IsMember(e.Pubkey) {
-			removed, err := s.Tree.removeSubtree(e.Pubkey)
-			if err != nil {
-				return err
-			}
-			for _, pk := range removed {
-				if pk == e.Pubkey {
-					continue // the banned pubkey is an outlaw, purged immediately, not grace-eligible
-				}
-				s.Evicted[pk] = e.Timestamp
-			}
-		}
-		return nil
-
-	case VerbPardon:
-		s.Bans.pardon(e.Pubkey)
-		return nil
-
-	case VerbBanDomain:
-		s.Bans.banDomain(e.Domain)
-		return nil
-
-	case VerbPardonDomain:
-		s.Bans.pardonDomain(e.Domain)
-		return nil
-
 	case VerbElevate, VerbFlipVisibility:
 		s.Elevation.elevate(e.Pubkey, e.Public, e.Source)
 		return nil
@@ -219,7 +178,7 @@ func (s *State) Apply(e Entry) error {
 		s.Elevation.lower(e.Pubkey)
 		return nil
 
-	case VerbArchiveRun, VerbRaidRun:
+	case VerbRaidRun:
 		return nil // audit-only; no domain-state effect
 
 	default:
@@ -233,9 +192,6 @@ func (s *State) Apply(e Entry) error {
 // immediately (CLAUDE.md: "no waiting for the next cycle").
 
 func (s *State) Invite(inviter, invitee, label, source string, at int64) (Entry, error) {
-	if s.Bans.IsBanned(invitee) {
-		return Entry{}, ErrTargetBanned
-	}
 	e := Entry{Verb: VerbInvite, Pubkey: invitee, InvitedBy: inviter, Label: label, Source: source, Timestamp: at}
 	if err := s.Apply(e); err != nil {
 		return Entry{}, err
@@ -262,41 +218,6 @@ func (s *State) Remove(requester, target, source string, at int64) (Entry, error
 
 func (s *State) Ennoble(target, source string, at int64) (Entry, error) {
 	e := Entry{Verb: VerbEnnoble, Pubkey: target, Source: source, Timestamp: at}
-	if err := s.Apply(e); err != nil {
-		return Entry{}, err
-	}
-	return e, nil
-}
-
-func (s *State) BanPubkey(target, source string, at int64) (Entry, error) {
-	if target == s.Owner {
-		return Entry{}, ErrOwnerUnbannable
-	}
-	e := Entry{Verb: VerbBan, Pubkey: target, Source: source, Timestamp: at}
-	if err := s.Apply(e); err != nil {
-		return Entry{}, err
-	}
-	return e, nil
-}
-
-func (s *State) PardonPubkey(target, source string, at int64) (Entry, error) {
-	e := Entry{Verb: VerbPardon, Pubkey: target, Source: source, Timestamp: at}
-	if err := s.Apply(e); err != nil {
-		return Entry{}, err
-	}
-	return e, nil
-}
-
-func (s *State) BanDomain(domain, source string, at int64) (Entry, error) {
-	e := Entry{Verb: VerbBanDomain, Domain: domain, Source: source, Timestamp: at}
-	if err := s.Apply(e); err != nil {
-		return Entry{}, err
-	}
-	return e, nil
-}
-
-func (s *State) PardonDomain(domain, source string, at int64) (Entry, error) {
-	e := Entry{Verb: VerbPardonDomain, Domain: domain, Source: source, Timestamp: at}
 	if err := s.Apply(e); err != nil {
 		return Entry{}, err
 	}
@@ -337,11 +258,6 @@ func (s *State) Lower(target, source string, at int64) (Entry, error) {
 	return e, nil
 }
 
-func (s *State) RecordArchiveRun(pubkey string, count int, source string, at int64) (Entry, error) {
-	e := Entry{Verb: VerbArchiveRun, Pubkey: pubkey, Count: count, Source: source, Timestamp: at}
-	return e, s.Apply(e)
-}
-
 func (s *State) RecordRaidRun(purged int, dryRun bool, source string, at int64) (Entry, error) {
 	e := Entry{Verb: VerbRaidRun, Purged: purged, DryRun: dryRun, Source: source, Timestamp: at}
 	return e, s.Apply(e)
@@ -349,9 +265,7 @@ func (s *State) RecordRaidRun(purged int, dryRun bool, source string, at int64) 
 
 // Citizens computes the effective citizenry per CLAUDE.md: {Lord} ∪ tree
 // members ∪ current follows ∪ elevated (favorites and wards both — this
-// file carries no visibility info, matching stateformat.Citizens). Banned
-// pubkeys are excluded defensively, though the Outlaws tier already wins
-// over citizenship in gatekeeper regardless of this file's contents.
+// file carries no visibility info, matching Citizens).
 func (s *State) Citizens(follows []string) []string {
 	set := map[string]bool{s.Owner: true}
 	for pk := range s.Tree.Members {
@@ -365,24 +279,12 @@ func (s *State) Citizens(follows []string) []string {
 	}
 	out := make([]string, 0, len(set))
 	for pk := range set {
-		if s.Bans.IsBanned(pk) {
-			continue
-		}
 		out = append(out, pk)
 	}
 	sort.Strings(out)
 	return out
 }
 
-func (s *State) CitizensJSON(follows []string) stateformat.Citizens {
-	return stateformat.Citizens{Pubkeys: s.Citizens(follows)}
-}
-
-func (s *State) BannedJSON() stateformat.Banned {
-	pks := make([]string, 0, len(s.Bans.Pubkeys))
-	for pk := range s.Bans.Pubkeys {
-		pks = append(pks, pk)
-	}
-	sort.Strings(pks)
-	return stateformat.Banned{Pubkeys: pks}
+func (s *State) CitizensJSON(follows []string) Citizens {
+	return Citizens{Pubkeys: s.Citizens(follows)}
 }

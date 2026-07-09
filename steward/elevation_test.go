@@ -63,33 +63,9 @@ func TestElevateSameVisibilityIsNoChange(t *testing.T) {
 	}
 }
 
-func TestBanRemovesElevation(t *testing.T) {
-	s := NewState(owner, 5, 4)
-	if _, err := s.Elevate("a", false, "src", 0); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.BanPubkey("a", "src", 1); err != nil {
-		t.Fatal(err)
-	}
-	if s.Elevation.IsElevated("a") {
-		t.Fatal("ban must remove elevation (ban beats elevation)")
-	}
-	if !s.Bans.IsBanned("a") {
-		t.Fatal("a should be banned")
-	}
-}
-
-func TestOwnerUnbannable(t *testing.T) {
-	s := NewState(owner, 5, 4)
-	if _, err := s.BanPubkey(owner, "src", 0); err != ErrOwnerUnbannable {
-		t.Fatalf("got %v, want ErrOwnerUnbannable", err)
-	}
-}
-
 func TestWardsAbsentFromCitizensVisibilityInfo(t *testing.T) {
 	// citizens.json (via CitizensJSON) must carry no visibility info at
-	// all -- gatekeeper cannot and need not distinguish a favorite from a
-	// ward. This test pins that stateformat.Citizens has no such field by
+	// all -- this test pins that Citizens has no such field by
 	// construction (a single []string), and that wards are still present
 	// (they must retain citizenship, invisibly).
 	s := NewState(owner, 5, 4)

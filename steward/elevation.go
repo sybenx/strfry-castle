@@ -1,5 +1,5 @@
 // Elevation: one mechanism, one visibility flag (favorite = public,
-// ward = private), ban-beats-elevation, react-warding. Lands in Phase 2/3a.
+// ward = private). Lands in Phase 2.
 // See CLAUDE.md, "The elevation model".
 package main
 
@@ -45,24 +45,3 @@ func (e *Elevation) elevate(pubkey string, public bool, source string) {
 func (e *Elevation) lower(pubkey string) {
 	delete(e.Records, pubkey)
 }
-
-// Bans holds the banned pubkey and domain sets. Domains are steward-side
-// only (CLAUDE.md: "gatekeeper never sees domains") — they exist here so
-// replay can reconstruct ban-domain/pardon-domain history, but only
-// resolved pubkeys ever reach banned.json.
-type Bans struct {
-	Pubkeys map[string]bool
-	Domains map[string]bool
-}
-
-func NewBans() *Bans {
-	return &Bans{Pubkeys: make(map[string]bool), Domains: make(map[string]bool)}
-}
-
-func (b *Bans) IsBanned(pubkey string) bool       { return b.Pubkeys[pubkey] }
-func (b *Bans) IsDomainBanned(domain string) bool { return b.Domains[domain] }
-
-func (b *Bans) ban(pubkey string)          { b.Pubkeys[pubkey] = true }
-func (b *Bans) pardon(pubkey string)       { delete(b.Pubkeys, pubkey) }
-func (b *Bans) banDomain(domain string)    { b.Domains[domain] = true }
-func (b *Bans) pardonDomain(domain string) { delete(b.Domains, domain) }

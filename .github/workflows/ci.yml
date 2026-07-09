@@ -20,16 +20,16 @@ jobs:
       - name: make build
         run: make build
 
-      - name: assert gatekeeper binaries are static
+      - name: assert steward binaries are static
         run: |
           set -e
           for arch in amd64 arm64; do
-            file bin/linux-$arch/gatekeeper
+            file bin/linux-$arch/steward
           done
           # ldd only runs natively on the amd64 runner; a static binary
           # makes it print this exact message rather than resolving libs.
-          if ! ldd bin/linux-amd64/gatekeeper 2>&1 | grep -q "not a dynamic executable"; then
-            echo "gatekeeper (linux/amd64) is not a static binary" >&2
+          if ! ldd bin/linux-amd64/steward 2>&1 | grep -q "not a dynamic executable"; then
+            echo "steward (linux/amd64) is not a static binary" >&2
             exit 1
           fi
 

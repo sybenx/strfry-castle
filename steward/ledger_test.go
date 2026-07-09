@@ -15,8 +15,8 @@ func TestAppendAndReadLedgerRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "ledger.jsonl")
 	want := []Entry{
 		{Verb: VerbInvite, Pubkey: "a", InvitedBy: owner, Label: "friend", Source: "req1", Timestamp: 1},
-		{Verb: VerbBan, Pubkey: "b", Source: "report1", Timestamp: 2},
-		{Verb: VerbElevate, Pubkey: "c", Public: true, Source: "req2", Timestamp: 3},
+		{Verb: VerbRemove, Pubkey: "a", Source: "req2", Timestamp: 2},
+		{Verb: VerbElevate, Pubkey: "c", Public: true, Source: "req3", Timestamp: 3},
 	}
 	for _, e := range want {
 		if err := AppendLedger(path, e); err != nil {
@@ -51,7 +51,7 @@ func TestReadLedgerMissingFileIsEmpty(t *testing.T) {
 func TestReadLedgerRejectsUnknownVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ledger.jsonl")
-	if err := AppendLedger(path, Entry{Verb: VerbBan, Pubkey: "a", Timestamp: 1}); err != nil {
+	if err := AppendLedger(path, Entry{Verb: VerbInvite, Pubkey: "a", Timestamp: 1}); err != nil {
 		t.Fatal(err)
 	}
 	// Hand-craft a future-version line and make sure replay refuses it
@@ -60,36 +60,13 @@ func TestReadLedgerRejectsUnknownVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.WriteString(`{"v":2,"verb":"ban","pubkey":"b","ts":2,"source":"x"}` + "\n"); err != nil {
+	if _, err := f.WriteString(`{"v":2,"verb":"invite","pubkey":"b","ts":2,"source":"x"}` + "\n"); err != nil {
 		t.Fatal(err)
 	}
 	f.Close()
 
 	if _, err := ReadLedger(path); err == nil {
 		t.Fatal("expected an error for an unknown ledger version")
-	}
-}
-
-func TestBanningTreeMemberCutsBranchAndGracePeriodsSubtreeOnly(t *testing.T) {
-	s := NewState(owner, 5, 4)
-	if _, err := s.Invite(owner, "a", "", "src", 0); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Invite("a", "b", "", "src", 1); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := s.BanPubkey("a", "report1", 100); err != nil {
-		t.Fatal(err)
-	}
-	if s.Tree.IsMember("a") || s.Tree.IsMember("b") {
-		t.Fatal("banning a cuts a's whole branch including b")
-	}
-	if _, graced := s.Evicted["a"]; graced {
-		t.Fatal("the banned pubkey itself must NOT be grace-eligible -- it purges immediately")
-	}
-	if ts, graced := s.Evicted["b"]; !graced || ts != 100 {
-		t.Fatalf("b (an innocent descendant) must be grace-eligible from the ban timestamp, got ts=%d ok=%v", ts, graced)
 	}
 }
 
@@ -121,16 +98,6 @@ func TestEnnobledFollowPersistsAfterUnfollow(t *testing.T) {
 	}
 }
 
-func TestInviteRejectsBannedTarget(t *testing.T) {
-	s := NewState(owner, 5, 4)
-	if _, err := s.BanPubkey("a", "src", 0); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Invite(owner, "a", "", "src", 1); !errors.Is(err, ErrTargetBanned) {
-		t.Fatalf("got %v, want ErrTargetBanned", err)
-	}
-}
-
 func TestBuildStateRejectsUnknownVerb(t *testing.T) {
 	_, err := BuildState(owner, []Entry{{V: ledgerVersion, Verb: "not-a-real-verb", Timestamp: 0}}, 5, 4)
 	if !errors.Is(err, ErrUnknownVerb) {
@@ -139,11 +106,11 @@ func TestBuildStateRejectsUnknownVerb(t *testing.T) {
 }
 
 // TestReplayIsDeterministic is the property test PLAN.md's Phase 2 asks
-// for: ledger replay always reconstructs identical tree + elevation + ban
-// state. It drives a state machine through random sequences of mutations,
-// then checks that (a) replaying the successfully-applied entries from
-// scratch reproduces identical state, and (b) round-tripping those entries
-// through the actual on-disk ledger format changes nothing.
+// for: ledger replay always reconstructs identical tree + elevation state.
+// It drives a state machine through random sequences of mutations, then
+// checks that (a) replaying the successfully-applied entries from scratch
+// reproduces identical state, and (b) round-tripping those entries through
+// the actual on-disk ledger format changes nothing.
 func TestReplayIsDeterministic(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	pool := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
@@ -159,7 +126,7 @@ func TestReplayIsDeterministic(t *testing.T) {
 			other := pool[rng.Intn(len(pool))]
 			var e Entry
 			var err error
-			switch rng.Intn(8) {
+			switch rng.Intn(5) {
 			case 0:
 				inviter := owner
 				if rng.Intn(2) == 0 {
@@ -175,15 +142,9 @@ func TestReplayIsDeterministic(t *testing.T) {
 			case 2:
 				e, err = s.Ennoble(pk, "src", at)
 			case 3:
-				e, err = s.BanPubkey(pk, "src", at)
-			case 4:
-				e, err = s.PardonPubkey(pk, "src", at)
-			case 5:
 				e, err = s.Elevate(pk, rng.Intn(2) == 0, "src", at)
-			case 6:
+			case 4:
 				e, err = s.Lower(pk, "src", at)
-			case 7:
-				e, err = s.BanDomain("example.com", "src", at)
 			}
 			if err == nil {
 				entries = append(entries, e)
@@ -222,12 +183,6 @@ func assertStateEqual(t *testing.T, trial int, label string, want, got *State) {
 	}
 	if !reflect.DeepEqual(want.Elevation.Records, got.Elevation.Records) {
 		t.Fatalf("trial %d (%s): elevation mismatch\nwant %+v\ngot  %+v", trial, label, want.Elevation.Records, got.Elevation.Records)
-	}
-	if !reflect.DeepEqual(want.Bans.Pubkeys, got.Bans.Pubkeys) {
-		t.Fatalf("trial %d (%s): banned pubkeys mismatch\nwant %+v\ngot  %+v", trial, label, want.Bans.Pubkeys, got.Bans.Pubkeys)
-	}
-	if !reflect.DeepEqual(want.Bans.Domains, got.Bans.Domains) {
-		t.Fatalf("trial %d (%s): banned domains mismatch\nwant %+v\ngot  %+v", trial, label, want.Bans.Domains, got.Bans.Domains)
 	}
 	wantC, gotC := want.Citizens(nil), got.Citizens(nil)
 	sort.Strings(wantC)
