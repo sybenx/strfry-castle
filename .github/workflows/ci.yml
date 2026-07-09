@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: make test
+        run: make test
+
+      - name: make build
+        run: make build
+
+      - name: assert gatekeeper binaries are static
+        run: |
+          set -e
+          for arch in amd64 arm64; do
+            file bin/linux-$arch/gatekeeper
+          done
+          # ldd only runs natively on the amd64 runner; a static binary
+          # makes it print this exact message rather than resolving libs.
+          if ! ldd bin/linux-amd64/gatekeeper 2>&1 | grep -q "not a dynamic executable"; then
+            echo "gatekeeper (linux/amd64) is not a static binary" >&2
+            exit 1
+          fi
+
+      # bytecheck is not wired in yet on purpose — towncrier/index.html is
+      # a Phase 0 placeholder and real content lands in Phase 6a, which is
+      # when this gate turns on (see DECISIONS.md).

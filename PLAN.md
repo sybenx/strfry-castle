@@ -7,7 +7,7 @@ tests green and a commit. Do not start a phase until the previous phase's
 acceptance criteria pass. Check off each phase here (`[x]`) when accepted.
 Resist adding anything not in the spec — light as a whip.
 
-## [ ] Phase 0 — Skeleton (30 min)
+## [x] Phase 0 — Skeleton (30 min)
 Repo layout per CLAUDE.md, Go module, Makefile (build/test/smoke/bytecheck,
 cross-compile linux/amd64 + linux/arm64; bytecheck is strict from day one —
 missing towncrier/index.html is a FAILURE, >60KB is a failure; it simply

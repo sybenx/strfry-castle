@@ -1,0 +1,16 @@
+# Changes to apply to an existing strfry.conf. Printed by install.sh, never
+# applied automatically (see DECISIONS.md). Merge these lines into your
+# running strfry.conf by hand.
+
+# 1. Write policy: route every incoming event through gatekeeper.
+writePolicy {
+    plugin = "/plugin/gatekeeper"
+}
+
+# 2. Real client IP: required for gatekeeper's per-IP rate limiter to mean
+# anything behind a reverse proxy. Without this every writer shares the
+# proxy's IP and the limiter is either a no-op or a self-DoS (CLAUDE.md,
+# Component 1). Set to whatever header your proxy sets (e.g. X-Real-IP).
+relay {
+    realIpHeader = "X-Real-IP"
+}

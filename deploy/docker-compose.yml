@@ -1,0 +1,51 @@
+# Docker-compose fragment for the Castle. This is written to be READ and
+# copied into an existing strfry Portainer stack, not applied blind —
+# install.sh prints the merge instructions rather than editing anyone's
+# stack (see DECISIONS.md, "install.sh editing strfry.conf / compose /
+# proxy configs" — rejected).
+#
+# It is also used as-is by `make smoke` for a scratch stack.
+#
+# strfry itself is expected to already exist in the target stack; the only
+# strfry-side changes needed are: mount the castle-state volume at
+# /plugin/, and set writePolicy.plugin = "/plugin/gatekeeper" in
+# strfry.conf (see strfry.conf.patch).
+
+services:
+  strfry:
+    image: dockurr/strfry:latest
+    volumes:
+      - strfry-data:/app/strfry-db
+      - castle-state:/plugin
+      - ./strfry.conf.patch:/app/strfry.conf:ro
+    ports:
+      - "7777:7777"
+
+  steward:
+    # Published image lands with the Phase 7 release workflow
+    # (ghcr.io/sybenx/castle-steward). Until then, `make smoke` builds and
+    # runs the steward binary directly rather than through this service.
+    image: ghcr.io/sybenx/castle-steward:latest
+    depends_on:
+      - strfry
+    environment:
+      OWNER_PUBKEY: ${OWNER_PUBKEY}
+      STRFRY_CONTAINER: strfry
+      PUBLIC_RELAYS: ${PUBLIC_RELAYS:-}
+      OUTER_TTL_DAYS: ${OUTER_TTL_DAYS:-30}
+      CYCLE_MINUTES: ${CYCLE_MINUTES:-10}
+      RAID_CRON: ${RAID_CRON:-}
+      RAID_DRY_RUN: ${RAID_DRY_RUN:-true}
+      MAX_INVITES: ${MAX_INVITES:-5}
+      MAX_DEPTH: ${MAX_DEPTH:-4}
+      NIP05_DOMAIN: ${NIP05_DOMAIN:-}
+      LISTEN: ${LISTEN:-:8787}
+    volumes:
+      - castle-state:/state
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8787:8787"
+
+volumes:
+  strfry-data:
+  castle-state:
