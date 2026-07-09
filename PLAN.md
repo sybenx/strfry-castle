@@ -43,7 +43,7 @@ event through the write policy at all (the DECISIONS.md rate-limit call
 assumes it; if strfry never invokes the plugin for ephemeral kinds, note
 that in DECISIONS.md and drop the pinning test). Commit + tag v0.1.0.
 
-## [ ] Phase 2 — steward core: ledger, tree, elevation (no network)
+## [x] Phase 2 — steward core: ledger, tree, elevation (no network)
 ledger.jsonl append/replay with all verbs (invite/remove/ennoble/ban/pardon/
 ban-domain/pardon-domain/elevate/lower/flip-visibility/archive-run/raid-run);
 every ledger line carries `"v":1` from the very first write (one field of

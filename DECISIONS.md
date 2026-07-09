@@ -175,3 +175,26 @@ doesn't cover. Format: date, decision, one-line why.
   thing is event ids as retention/protection TARGETS. Earlier absolute
   wording ("never event ids") read as self-contradicting; reworded in
   CLAUDE.md and PLAN.md.
+- **Re-elevating to the same visibility appends nothing to the ledger**
+  (`State.Elevate` returns `ErrNoChange`). CLAUDE.md says re-elevating
+  "SETS the requested visibility (idempotent; a change is ledgered as
+  flip-visibility)" but doesn't say what happens when there's no change.
+  Treating a true no-op as "don't write a ledger line" keeps the ledger a
+  record of actual events, not of API calls that happened to touch nothing;
+  Phase 5a's `/api/elevate` handler should treat `ErrNoChange` as success
+  (200), not a client error.
+- **`State.Citizens` excludes banned pubkeys defensively**, even though
+  CLAUDE.md's formula ({Lord} ∪ tree ∪ follows ∪ elevated) doesn't mention
+  bans. Belt-and-suspenders: gatekeeper's Outlaws tier already wins over
+  citizenship regardless of citizens.json's contents, but excluding bans
+  here stops stats/citizen counts from double-counting an outlaw who's
+  still in a stale follows.json snapshot (follows sync is async per Phase
+  3a and can't retroactively edit history the moment a ban lands).
+- **Ban-cuts-branch grace-periods the subtree, not the banned pubkey
+  itself.** `State.Apply`'s `VerbBan` case adds every removed descendant to
+  `Evicted` except the banned pubkey (an outlaw, purged immediately per
+  CLAUDE.md's exile-vs-outlawry distinction). A plain `Remove` grace-periods
+  everyone removed, root included. Two different eviction outcomes from
+  structurally the same "cut a branch" operation, keyed on whether the root
+  was banned or merely removed — easy to get backwards, pinned by
+  `TestBanningTreeMemberCutsBranchAndGracePeriodsSubtreeOnly`.

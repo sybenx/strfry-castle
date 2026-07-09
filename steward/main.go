@@ -8,8 +8,10 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // config holds the env-driven settings from CLAUDE.md, Component 2.
@@ -47,6 +49,36 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// writeJSONAtomic marshals v and writes it to path via a temp file in the
+// same directory followed by a rename, so a crash mid-write never leaves a
+// truncated state file for gatekeeper (or another reader) to hot-reload.
+func writeJSONAtomic(path string, v interface{}) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func main() {
