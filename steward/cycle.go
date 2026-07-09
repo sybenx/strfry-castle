@@ -25,9 +25,12 @@ type Cycle struct {
 	MaxInvites     int
 	MaxDepth       int
 	OuterTTLDays   int
+	RaidCron       string
+	RaidDryRun     bool
 	RunningVersion string
 	Fetcher        NostrFetcher
 	Scanner        strfryScanner
+	CLI            strfryCLI
 	ReleaseChecker ReleaseChecker
 	Now            func() time.Time
 }
@@ -35,7 +38,7 @@ type Cycle struct {
 // NewCycle builds a Cycle from config plus the real network/strfry
 // dependencies. Used by main.go; tests construct a Cycle literal directly
 // with fakes instead.
-func NewCycle(cfg config, fetcher NostrFetcher, scanner strfryScanner, releaseChecker ReleaseChecker) *Cycle {
+func NewCycle(cfg config, fetcher NostrFetcher, scanner strfryScanner, cli strfryCLI, releaseChecker ReleaseChecker) *Cycle {
 	return &Cycle{
 		StateDir:       "/state",
 		Owner:          cfg.OwnerPubkey,
@@ -44,9 +47,12 @@ func NewCycle(cfg config, fetcher NostrFetcher, scanner strfryScanner, releaseCh
 		MaxInvites:     cfg.MaxInvites,
 		MaxDepth:       cfg.MaxDepth,
 		OuterTTLDays:   cfg.OuterTTLDays,
+		RaidCron:       cfg.RaidCron,
+		RaidDryRun:     cfg.RaidDryRun,
 		RunningVersion: buildVersion,
 		Fetcher:        fetcher,
 		Scanner:        scanner,
+		CLI:            cli,
 		ReleaseChecker: releaseChecker,
 		Now:            time.Now,
 	}

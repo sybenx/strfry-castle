@@ -3,8 +3,9 @@
 // towncrier's static files, so there is no separate web container. See
 // CLAUDE.md, Component 2.
 //
-// As of Phase 3b this runs the cycle loop (follows sync, ledger merge,
-// stats). The HTTP API and raid land in Phases 4-5.
+// As of Phase 4 this runs the cycle loop (follows sync, ledger merge,
+// stats) plus raids (manual, via Cycle.Raid, and scheduled via RAID_CRON).
+// The HTTP API lands in Phase 5.
 package main
 
 import (
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/robfig/cron/v3"
 )
 
 // buildVersion is stats.json's version.running. Set via
@@ -154,7 +157,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cycle := NewCycle(cfg, relayFetcher{}, &dockerStrfryScanner{Container: cfg.StrfryContainer}, githubReleaseChecker{})
+	cycle := NewCycle(cfg, relayFetcher{}, &dockerStrfryScanner{Container: cfg.StrfryContainer}, &dockerStrfryCLI{Container: cfg.StrfryContainer}, githubReleaseChecker{})
 
 	runCycle := func() {
 		if err := cycle.Run(ctx); err != nil {
@@ -163,6 +166,24 @@ func main() {
 	}
 
 	runCycle()
+
+	// RAID_CRON is optional: empty (the default) means manual raids only.
+	// Scheduled raids always use the standing OUTER_TTL_DAYS (no override)
+	// and honor RAID_DRY_RUN like any other raid.
+	if cfg.RaidCron != "" {
+		scheduler := cron.New()
+		_, err := scheduler.AddFunc(cfg.RaidCron, func() {
+			if _, err := cycle.Raid(ctx, nil, false, "cron"); err != nil {
+				fmt.Fprintf(os.Stderr, "steward: scheduled raid failed: %v\n", err)
+			}
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "steward: invalid RAID_CRON=%q, scheduled raids disabled: %v\n", cfg.RaidCron, err)
+		} else {
+			scheduler.Start()
+			defer scheduler.Stop()
+		}
+	}
 
 	ticker := time.NewTicker(time.Duration(cfg.CycleMinutes) * time.Minute)
 	defer ticker.Stop()

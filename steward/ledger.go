@@ -40,6 +40,7 @@ type Entry struct {
 	Label     string `json:"label,omitempty"`      // invite
 	Public    bool   `json:"public,omitempty"`     // elevate/flip-visibility
 	Purged    int    `json:"purged,omitempty"`     // raid-run
+	TTLDays   int    `json:"ttl_days,omitempty"`   // raid-run: override-or-default actually used
 	DryRun    bool   `json:"dry_run,omitempty"`    // raid-run
 }
 
@@ -258,8 +259,8 @@ func (s *State) Lower(target, source string, at int64) (Entry, error) {
 	return e, nil
 }
 
-func (s *State) RecordRaidRun(purged int, dryRun bool, source string, at int64) (Entry, error) {
-	e := Entry{Verb: VerbRaidRun, Purged: purged, DryRun: dryRun, Source: source, Timestamp: at}
+func (s *State) RecordRaidRun(purged, ttlDays int, dryRun bool, source string, at int64) (Entry, error) {
+	e := Entry{Verb: VerbRaidRun, Purged: purged, TTLDays: ttlDays, DryRun: dryRun, Source: source, Timestamp: at}
 	return e, s.Apply(e)
 }
 

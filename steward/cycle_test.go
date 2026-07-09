@@ -94,6 +94,38 @@ func (f *fakeScanner) ScanAll(ctx context.Context, fn func(pubkey string, create
 	return nil
 }
 
+func (f *fakeScanner) ScanUntil(ctx context.Context, until int64, fn func(pubkey string, createdAt int64)) error {
+	for _, e := range f.events {
+		if e.CreatedAt <= until {
+			fn(e.Pubkey, e.CreatedAt)
+		}
+	}
+	return nil
+}
+
+// fakeStrfryCLI is a strfryCLI test double recording every delete call it
+// receives, so raid tests can assert exactly what would be (or was) deleted
+// without a live strfry.
+type fakeStrfryCLI struct {
+	calls []fakeDeleteCall
+	err   error
+}
+
+type fakeDeleteCall struct {
+	Pubkeys []string
+	Until   int64
+	DryRun  bool
+}
+
+func (f *fakeStrfryCLI) DeleteByAuthors(ctx context.Context, pubkeys []string, until int64, dryRun bool) (int, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	cp := append([]string(nil), pubkeys...)
+	f.calls = append(f.calls, fakeDeleteCall{Pubkeys: cp, Until: until, DryRun: dryRun})
+	return len(pubkeys), nil
+}
+
 // fakeReleaseChecker is a ReleaseChecker test double.
 type fakeReleaseChecker struct {
 	latest string
@@ -119,6 +151,7 @@ func newTestCycle(t *testing.T, fetcher NostrFetcher) *Cycle {
 		RunningVersion: "test",
 		Fetcher:        fetcher,
 		Scanner:        &fakeScanner{},
+		CLI:            &fakeStrfryCLI{},
 		ReleaseChecker: &fakeReleaseChecker{},
 		Now:            func() time.Time { return time.Unix(1_000_000, 0) },
 	}

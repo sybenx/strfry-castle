@@ -77,7 +77,7 @@ READS this cache; the network code lives here.
 stack; ward count appears nowhere; name cache populates for tree members
 and public favorites and contains no ward pubkeys.
 
-## [ ] Phase 4 — the raid
+## [x] Phase 4 — the raid
 Streaming scan-then-delete with the two keep-conditions (citizen, eviction
 grace); the per-raid ttl_days override with clamp (≥1, else 400) and
 grace-decoupling (grace ALWAYS uses OUTER_TTL_DAYS); dry-run-as-preview

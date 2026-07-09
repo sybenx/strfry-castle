@@ -182,6 +182,33 @@ notes its revert path; none should be rebuilt without an explicit new call.
   ahead of Phase 4, never yet run against a real strfry), caught only
   because Phase 3b's smoke test is the first to actually shell into the
   live scratch container.
+- **The delete wrapper's filter carries BOTH `authors` and `until`, not
+  authors alone** — a targeted stranger may have posted again after the
+  cutoff, and "younger than cutoff" is a keep condition per-event, not
+  per-author; an authors-only filter would sweep up their fresh notes too.
+  Verified live against `dockurr/strfry`: `strfry delete --filter
+  '{"authors":[...], "until": N}'` deletes only that author's events at or
+  before N ("Deleting 1 events" in its log), sparing the same author's
+  newer note. The raid's scan uses the same discipline: `strfry scan
+  '{"until": cutoff}'` (CLAUDE.md's exact pseudocode), also verified live,
+  rather than `ScanAll` plus client-side filtering — so a large Outer Lands
+  doesn't get slurped on every raid just to find the old slice of it.
+- **Dry-run raids ARE appended to the ledger** (`raid-run` with
+  `dry_run:true`), for audit — but stats.json's `raids.last_at`/
+  `last_purged` are computed only from non-dry-run entries. Reasoning: with
+  `RAID_DRY_RUN=true` (the default), every raid is effectively a dry run,
+  and the Lord should see "no raid has actually happened yet," not a
+  preview's numbers masquerading as a real purge.
+- **`RAID_CRON` is a standard 5-field cron expression**, parsed with
+  `github.com/robfig/cron/v3` (`cron.ParseStandard`). Chosen over a
+  hand-rolled parser: computing `stats.json`'s `raids.next` needs a real
+  "next occurrence after now" calculation, which is exactly what the
+  library exists for, and it's one well-known dependency with no
+  transitive deps of its own — less code than reimplementing schedule math.
+  Scheduled raids run on the library's own internal ticker (not tied to
+  CYCLE_MINUTES) so they can't drift or be missed by an unrelated loop;
+  they always use the default OUTER_TTL_DAYS (no override) and still honor
+  RAID_DRY_RUN like any other raid.
 
 ## Accepted trade-offs (known, intentional)
 

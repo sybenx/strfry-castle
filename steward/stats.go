@@ -37,6 +37,11 @@ type strfryScanner interface {
 	// ScanAll streams every stored event's author and timestamp to fn, one
 	// at a time ("stream, don't slurp" — CLAUDE.md's raid pseudocode).
 	ScanAll(ctx context.Context, fn func(pubkey string, createdAt int64)) error
+
+	// ScanUntil streams every stored event with created_at <= until (NIP-01
+	// "until" semantics) to fn. This is the raid's scan: CLAUDE.md's
+	// `strfry scan '{"until": cutoff}'`.
+	ScanUntil(ctx context.Context, until int64, fn func(pubkey string, createdAt int64)) error
 }
 
 // countByAuthors sums Count across pubkeys in scanBatchSize-sized batches so
@@ -92,7 +97,19 @@ func (d *dockerStrfryScanner) Count(ctx context.Context, filter map[string]any) 
 }
 
 func (d *dockerStrfryScanner) ScanAll(ctx context.Context, fn func(pubkey string, createdAt int64)) error {
-	cmd := exec.CommandContext(ctx, "docker", "exec", d.Container, strfryBinPath, "scan", "{}")
+	return d.scan(ctx, map[string]any{}, fn)
+}
+
+func (d *dockerStrfryScanner) ScanUntil(ctx context.Context, until int64, fn func(pubkey string, createdAt int64)) error {
+	return d.scan(ctx, map[string]any{"until": until}, fn)
+}
+
+func (d *dockerStrfryScanner) scan(ctx context.Context, filter map[string]any, fn func(pubkey string, createdAt int64)) error {
+	data, err := json.Marshal(filter)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "docker", "exec", d.Container, strfryBinPath, "scan", string(data))
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -168,8 +185,9 @@ type OuterLandsStats struct {
 	Oldest int64 `json:"oldest"`
 }
 
-// RaidStats.Next stays nil until Phase 4 wires RAID_CRON scheduling; it is
-// always null while RAID_CRON is empty regardless (CLAUDE.md's schema).
+// RaidStats.Next is computed from RAID_CRON via Cycle.nextRaidTime
+// (raid.go); it is always null while RAID_CRON is empty (CLAUDE.md's
+// schema).
 type RaidStats struct {
 	Next       *int64 `json:"next"`
 	LastAt     int64  `json:"last_at,omitempty"`
@@ -238,10 +256,14 @@ func evictedInGrace(state *State, follows []string, now int64, outerTTLDays int)
 	return out
 }
 
-// lastRaidRun returns the most recent raid-run ledger entry, if any.
+// lastRaidRun returns the most recent raid-run ledger entry that actually
+// deleted anything, if any. Dry-run previews are excluded: they are logged
+// for audit (see raid.go), but stats.json's "last raid" must reflect real
+// purges — otherwise a Lord running only previews (or stuck on the
+// RAID_DRY_RUN=true default) would see a "last raid" that never happened.
 func lastRaidRun(entries []Entry) (at int64, purged int, ok bool) {
 	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Verb == VerbRaidRun {
+		if entries[i].Verb == VerbRaidRun && !entries[i].DryRun {
 			return entries[i].Timestamp, entries[i].Purged, true
 		}
 	}
@@ -300,7 +322,7 @@ func (c *Cycle) generateStats(ctx context.Context, state *State, follows Follows
 		version.Latest = latest
 	}
 
-	raids := RaidStats{Next: nil}
+	raids := RaidStats{Next: c.nextRaidTime(c.Now())}
 	if at, purged, ok := lastRaidRun(entries); ok {
 		raids.LastAt = at
 		raids.LastPurged = purged

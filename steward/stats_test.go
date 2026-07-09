@@ -129,6 +129,62 @@ func TestStats_CitizenAndOuterLandsCounts(t *testing.T) {
 	}
 }
 
+// TestStats_LastRaidExcludesDryRuns: stats.json's last_at/last_purged must
+// reflect a REAL purge, not a preview — otherwise a Lord who only ever runs
+// previews (or is stuck on the RAID_DRY_RUN=true default) would see a
+// "last raid" that never actually happened.
+func TestStats_LastRaidExcludesDryRuns(t *testing.T) {
+	c := newTestCycle(t, &fakeFetcher{})
+	if err := AppendLedger(c.ledgerPath(), Entry{Verb: VerbRaidRun, Purged: 99, DryRun: true, Timestamp: 500}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendLedger(c.ledgerPath(), Entry{Verb: VerbRaidRun, Purged: 7, DryRun: false, Timestamp: 600}); err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, c)
+
+	var stats Stats
+	if err := json.Unmarshal([]byte(readRaw(t, c.statsPath())), &stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats.Raids.LastAt != 600 || stats.Raids.LastPurged != 7 {
+		t.Fatalf("raids = %+v, want the real raid (ts=600, purged=7), not the dry-run preview", stats.Raids)
+	}
+}
+
+func TestStats_RaidNextNullWhenCronEmpty(t *testing.T) {
+	c := newTestCycle(t, &fakeFetcher{})
+	c.RaidCron = ""
+
+	mustRun(t, c)
+
+	var stats Stats
+	if err := json.Unmarshal([]byte(readRaw(t, c.statsPath())), &stats); err != nil {
+		t.Fatal(err)
+	}
+	if stats.Raids.Next != nil {
+		t.Fatalf("raids.next = %v, want null when RAID_CRON is empty", *stats.Raids.Next)
+	}
+}
+
+func TestStats_RaidNextFromCron(t *testing.T) {
+	c := newTestCycle(t, &fakeFetcher{})
+	c.RaidCron = "0 0 * * *"
+	c.Now = func() time.Time { return time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC) }
+
+	mustRun(t, c)
+
+	var stats Stats
+	if err := json.Unmarshal([]byte(readRaw(t, c.statsPath())), &stats); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC).Unix()
+	if stats.Raids.Next == nil || *stats.Raids.Next != want {
+		t.Fatalf("raids.next = %v, want %d", stats.Raids.Next, want)
+	}
+}
+
 func TestStats_EvictedInGrace(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	c := newTestCycle(t, &fakeFetcher{})
