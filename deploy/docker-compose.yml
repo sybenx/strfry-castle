@@ -27,10 +27,11 @@ services:
       - "7777:7777"
 
   steward:
-    # Published image lands with the Phase 7 release workflow
-    # (ghcr.io/sybenx/castle-steward). Until then, `make smoke` builds and
+    # Published by the Phase 7 release workflow on tag push. Pinned to a
+    # specific release rather than :latest so this reference stack doesn't
+    # silently move out from under anyone; `make smoke` still builds and
     # runs the steward binary directly rather than through this service.
-    image: ghcr.io/sybenx/castle-steward:latest
+    image: ghcr.io/sybenx/castle-steward:v0.4.0
     depends_on:
       - strfry
     environment:

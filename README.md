@@ -49,12 +49,14 @@ elevations; strfry itself has no protocol-level memory of admin actions).
 
 ## Manual install
 
-Add a `steward` service to your existing strfry compose stack:
+Add a `steward` service to your existing strfry compose stack (check the
+[releases page](https://github.com/sybenx/castle-for-strfry-experiment/releases)
+for a newer tag than the one below):
 
 ```yaml
 services:
   steward:
-    image: ghcr.io/sybenx/castle-steward:latest
+    image: ghcr.io/sybenx/castle-steward:v0.4.0
     depends_on:
       - strfry               # your strfry service/container name
     env_file: .env
