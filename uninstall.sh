@@ -25,13 +25,25 @@ ask() {
   printf '%s' "$reply"
 }
 
-cat <<'EOF'
+# Prefer the actual locally pulled tag over a generic placeholder, when
+# there's exactly one — it's what install.sh most likely wrote into this
+# host's compose file, so echoing it back is a more useful diff target
+# than a wildcard. Ambiguous or absent falls back to "...".
+SNIPPET_TAG="..."
+if command -v docker >/dev/null 2>&1; then
+  TAGS=$(docker images "$IMAGE" --format '{{.Tag}}' 2>/dev/null || true)
+  if [ -n "$TAGS" ] && [ "$(printf '%s\n' "$TAGS" | wc -l)" -eq 1 ]; then
+    SNIPPET_TAG="$TAGS"
+  fi
+fi
+
+cat <<EOF
 ------------------------------------------------------------------------------
 Remove this service (and the castle-state volume entry, if you added it)
-from your docker-compose.yml, then run `docker compose up -d` to apply:
+from your docker-compose.yml, then run \`docker compose up -d\` to apply:
 
   steward:
-    image: ghcr.io/sybenx/castle-steward:...
+    image: $IMAGE:$SNIPPET_TAG
     depends_on:
       - <your strfry container>
     env_file: .env
