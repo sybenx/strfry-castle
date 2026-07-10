@@ -310,7 +310,7 @@ Signed-in view (one "Enter the castle" button → NIP-07):
   "the_lord": {"pubkey": "<hex>", "events": 12345},
   "citizens": {"tree": 47, "follows": 812, "favored": 6, "events": 480211},
   "evicted": [{"pubkey": "<hex>", "expires": 1730073600}],
-  "outer_lands": {"events": 231998, "oldest": 1727400000},
+  "outer_lands": {"events": 231998, "oldest": 1727400000, "ttl_days": 30},
   "raids": {"next": null, "last_at": 1729987200, "last_purged": 5410},
   "invites": {"max_per_member": 5, "max_depth": 4}
 }

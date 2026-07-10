@@ -56,6 +56,26 @@ button.enter:hover{background:var(--gold)}
 #nip07-help{display:none;font-size:.85em;color:var(--dim);max-width:500px;margin:10px auto 0;text-align:left}
 #nip07-help a{display:inline}
 .err{color:var(--red)}
+.ctrl{margin-top:12px;padding-top:10px;border-top:1px dashed var(--border)}
+.ctrl h3{margin:0 0 8px;font-size:.82em;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.ctrl-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0}
+input.txt{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+  border-radius:6px;padding:6px 9px;font-size:.88em;min-width:0;flex:1 1 180px}
+input.txt.narrow{flex:0 1 90px}
+button.mini{background:var(--panel2);color:var(--text);border:1px solid var(--border);
+  border-radius:6px;padding:5px 11px;font-size:.82em;cursor:pointer}
+button.mini:hover{border-color:var(--gold-dim)}
+button.mini.danger{color:var(--red)}
+button.mini.danger:hover{border-color:var(--red)}
+button.mini.primary{background:var(--gold-dim);color:#100e08;border-color:var(--gold-dim);font-weight:600}
+button.mini.primary:hover{background:var(--gold)}
+.starbtn{background:none;border:none;color:var(--gold);cursor:pointer;font-size:1em;padding:0 2px;margin-left:2px}
+.starbtn:hover{color:#fff}
+.hint{color:var(--dim);font-size:.8em}
+.row .rowctrl{margin-left:auto;flex:none}
+#sec-wards{display:none}
+.who{text-align:center;color:var(--dim);font-size:.85em;margin:14px 0 -4px}
+.who button.mini{margin-left:8px}
 </style>
 </head>
 <body>
@@ -84,6 +104,23 @@ button.enter:hover{background:var(--gold)}
 <section id="sec-court">
   <h2>The Court</h2>
   <div id="court-tree"><span class="empty">loading&hellip;</span></div>
+  <div class="ctrl" id="invite-ctrl" style="display:none">
+    <h3>Invite</h3>
+    <div class="ctrl-row">
+      <input class="txt" id="invite-pubkey" placeholder="npub or hex pubkey">
+      <input class="txt" id="invite-label" placeholder="petname (optional)">
+      <button class="mini primary" data-action="invite">Invite</button>
+    </div>
+    <div class="hint" id="invite-remaining"></div>
+  </div>
+  <div class="ctrl" id="ennoble-ctrl" style="display:none">
+    <h3>Ennoble</h3>
+    <div class="ctrl-row">
+      <input class="txt" id="ennoble-pubkey" placeholder="npub or hex pubkey">
+      <button class="mini primary" data-action="ennoble">Ennoble</button>
+    </div>
+    <div class="hint">Adds someone straight to the tree as your direct invitee — tree membership then holds even if they're later unfollowed.</div>
+  </div>
 </section>
 
 <section id="sec-favored">
@@ -101,10 +138,35 @@ button.enter:hover{background:var(--gold)}
   <div id="evicted-list"><span class="empty">loading&hellip;</span></div>
 </section>
 
+<section id="sec-wards">
+  <h2>The Wards</h2>
+  <p class="note" style="margin-top:0">Wards are protected like favorites but shown to no one but the Lord.</p>
+  <div id="wards-list"><span class="empty">loading&hellip;</span></div>
+  <div class="ctrl">
+    <div class="ctrl-row">
+      <input class="txt" id="ward-pubkey" placeholder="npub or hex pubkey to ward">
+      <button class="mini primary" data-action="ward-add">Add ward</button>
+    </div>
+  </div>
+</section>
+
 <section id="sec-outerlands">
   <h2>The Outer Lands</h2>
   <div class="stats-grid" id="outerlands-stats"><span class="empty">loading&hellip;</span></div>
   <p class="note">The Outer Lands are open to all. Events here survive until the next raid, at which point strangers' notes older than the standing limit are swept away — the invited, the followed, and the favored are never touched.</p>
+  <div class="ctrl" id="raid-ctrl" style="display:none">
+    <h3>The Raid</h3>
+    <div class="ctrl-row">
+      <label for="raid-days" class="hint">purge strangers' notes older than</label>
+      <input class="txt narrow" type="number" min="1" step="1" id="raid-days">
+      <label for="raid-days" class="hint">days</label>
+      <button class="mini" data-action="raid-preview">Preview</button>
+    </div>
+    <div class="hint" id="raid-result"></div>
+    <div class="ctrl-row" id="raid-confirm-row" style="display:none">
+      <button class="mini danger" data-action="raid-confirm">Raid</button>
+    </div>
+  </div>
 </section>
 
 <section id="sec-dms">
@@ -117,7 +179,7 @@ button.enter:hover{background:var(--gold)}
   </p>
 </section>
 
-<div class="enter-wrap">
+<div class="enter-wrap" id="enter-wrap">
   <button class="enter" id="enter-btn">Enter the castle</button>
   <div id="nip07-help">
     <p>No Nostr signer extension was found. Signing in requires a NIP-07
@@ -129,6 +191,10 @@ button.enter:hover{background:var(--gold)}
       <li><a href="https://www.nostrconnect.com/" target="_blank" rel="noopener">Nostr Connect</a> (mobile signers like Amber)</li>
     </ul>
   </div>
+</div>
+<div class="who" id="who-wrap" style="display:none">
+  Signed in as <span id="who-name"></span><span id="who-role"></span>
+  <button class="mini" id="leave-btn">leave</button>
 </div>
 
 </main>
@@ -163,6 +229,14 @@ function avatarHTML(picture, alt){
   return '<span class="avatar-fallback">?</span>';
 }
 
+// --- signed-in state ---
+let myPubkey = null;
+let isLord = false;
+let isMember = false;
+let latestStats = null;
+let latestTree = null;
+let raidPreview = null; // {days, events} from the last successful raid preview
+
 function memberRow(pk, name, picture, extraClass, starred){
   const label = esc(name) || short(pk);
   return '<div class="row' + (extraClass ? ' ' + extraClass : '') + '">' +
@@ -170,6 +244,16 @@ function memberRow(pk, name, picture, extraClass, starred){
     '<a class="name" href="' + njumpURL(pk) + '" target="_blank" rel="noopener">' + label + '</a>' +
     (starred ? '<span class="star" title="a favorite of the Lord">★</span>' : '') +
     '</div>';
+}
+
+function favoredRow(f){
+  const label = esc(f.name) || short(f.pubkey);
+  const lower = isLord
+    ? '<button class="mini danger rowctrl" data-action="unfavor" data-pubkey="' + f.pubkey + '">remove</button>'
+    : '';
+  return '<div class="row">' + avatarHTML(f.picture) +
+    '<a class="name" href="' + njumpURL(f.pubkey) + '" target="_blank" rel="noopener">' + label + '</a>' +
+    lower + '</div>';
 }
 
 function fmtAge(unixSeconds){
@@ -195,6 +279,9 @@ async function fetchJSON(path){
 }
 
 function renderTree(data){
+  latestTree = data;
+  isMember = data.members.some(m => m.pubkey === myPubkey);
+
   // Lord
   document.getElementById('lord-row').innerHTML =
     '<a class="name" href="' + njumpURL(data.owner) + '" target="_blank" rel="noopener">' +
@@ -205,17 +292,25 @@ function renderTree(data){
   for (const m of data.members) {
     (byInviter[m.invited_by] = byInviter[m.invited_by] || []).push(m);
   }
-  const byPubkey = {};
-  for (const m of data.members) byPubkey[m.pubkey] = m;
 
   function renderNode(m){
     const label = esc(m.label ? m.label + ' — ' : '') +
       (esc(m.name) || short(m.pubkey));
     const kids = byInviter[m.pubkey] || [];
-    const star = m.favorite ? '<span class="star" title="a favorite of the Lord">★</span>' : '';
+    let star;
+    if (isLord) {
+      star = '<button class="starbtn" data-action="' + (m.favorite ? 'unfavor' : 'favorite') +
+        '" data-pubkey="' + m.pubkey + '" title="' + (m.favorite ? 'remove favorite' : 'make a favorite') + '">' +
+        (m.favorite ? '★' : '☆') + '</button>';
+    } else {
+      star = m.favorite ? '<span class="star" title="a favorite of the Lord">★</span>' : '';
+    }
+    const remove = (myPubkey && (isLord || m.invited_by === myPubkey))
+      ? '<button class="mini danger rowctrl" data-action="remove" data-pubkey="' + m.pubkey + '">remove</button>'
+      : '';
     let html = '<details open><summary>' + avatarHTML(m.picture) +
       '<a href="' + njumpURL(m.pubkey) + '" target="_blank" rel="noopener" style="margin-left:6px">' +
-      label + '</a>' + star + '</summary>';
+      label + '</a>' + star + remove + '</summary>';
     if (kids.length) {
       html += '<div class="children">' + kids.map(renderNode).join('') + '</div>';
     }
@@ -232,10 +327,8 @@ function renderTree(data){
   // Favored (non-tree-member favorites)
   const favoredEl = document.getElementById('favored-list');
   favoredEl.innerHTML = data.favored.length
-    ? data.favored.map(f => memberRow(f.pubkey, f.name, f.picture)).join('')
+    ? data.favored.map(favoredRow).join('')
     : '<span class="empty">none yet</span>';
-
-  return {byPubkey};
 }
 
 function renderEvicted(evicted, raidsAreManual){
@@ -271,8 +364,11 @@ function renderStats(stats){
     ['Last raid', lastRaid],
   ].map(([l,n]) => '<div class="stat"><div class="n">' + esc(n) + '</div><div class="l">' + esc(l) + '</div></div>').join('');
 
+  const oldBanner = document.getElementById('version-banner');
+  if (oldBanner) oldBanner.remove();
   if (stats.version && stats.version.latest && stats.version.latest !== stats.version.running) {
     const tag = document.createElement('p');
+    tag.id = 'version-banner';
     tag.className = 'note';
     tag.innerHTML = 'A newer version is available: <strong>' + esc(stats.version.latest) +
       '</strong> (running ' + esc(stats.version.running) + '). Update with the command in your README.';
@@ -282,12 +378,13 @@ function renderStats(stats){
   return raidsAreManual;
 }
 
-async function boot(){
+async function refreshAll(){
   try {
     const [stats, tree] = await Promise.all([
       fetchJSON('/api/stats'),
       fetchJSON('/api/tree'),
     ]);
+    latestStats = stats;
     const raidsAreManual = renderStats(stats);
     renderTree(tree);
     renderEvicted(tree.evicted, raidsAreManual);
@@ -296,6 +393,10 @@ async function boot(){
       '<a class="name" href="' + njumpURL(stats.the_lord.pubkey) + '" target="_blank" rel="noopener">' +
       esc(short(stats.the_lord.pubkey)) + '</a>' +
       '<span class="meta">' + esc(stats.the_lord.events) + ' events</span>';
+    if (myPubkey) {
+      isLord = myPubkey === stats.the_lord.pubkey;
+      applySignedInUI();
+    }
   } catch (e) {
     console.error(e);
     document.querySelectorAll('.empty').forEach(el => {
@@ -303,6 +404,204 @@ async function boot(){
       el.classList.add('err');
     });
   }
+}
+
+// --- NIP-07 sign-in and NIP-98 signed requests ---
+
+async function sha256Hex(s){
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// nip98Fetch signs a NIP-98 event for path+method and, when a body is
+// given, binds the signature to it via the standard `payload` tag (sha256
+// hex of the exact bytes sent). Without that binding, the signature only
+// proves "this pubkey hit this URL with this method" — never which body —
+// so two legitimate, differently-bodied requests to the same endpoint
+// within the same wall-clock second (e.g. the raid control's Preview
+// immediately followed by its Raid confirm, both POST /api/raid) would
+// sign byte-identical events and the second would be rejected as a replay
+// of the first.
+async function nip98Fetch(path, method, body){
+  if (!window.nostr) throw new Error('no NIP-07 signer available');
+  const tags = [['u', location.origin + path], ['method', method]];
+  const bodyStr = body !== undefined ? JSON.stringify(body) : undefined;
+  if (bodyStr !== undefined) {
+    tags.push(['payload', await sha256Hex(bodyStr)]);
+  }
+  const event = {
+    kind: 27235,
+    created_at: Math.floor(Date.now() / 1000),
+    tags,
+    content: '',
+  };
+  const signed = await window.nostr.signEvent(event);
+  const headers = {Authorization: 'Nostr ' + btoa(JSON.stringify(signed))};
+  const opts = {method, headers};
+  if (bodyStr !== undefined) {
+    headers['Content-Type'] = 'application/json';
+    opts.body = bodyStr;
+  }
+  const res = await fetch(path, opts);
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* empty body */ }
+  if (!res.ok) throw new Error(data.error || (path + ': ' + res.status));
+  return data;
+}
+
+function applySignedInUI(){
+  document.getElementById('enter-wrap').style.display = 'none';
+  document.getElementById('who-wrap').style.display = 'block';
+  document.getElementById('who-name').textContent = short(myPubkey);
+  document.getElementById('who-role').textContent =
+    isLord ? ' (the Lord)' : (isMember ? ' (a member of the Court)' : ' (not yet a member)');
+
+  const canInvite = isLord || isMember;
+  document.getElementById('invite-ctrl').style.display = canInvite ? 'block' : 'none';
+  if (canInvite && latestTree && latestStats) {
+    const mine = latestTree.members.filter(m => m.invited_by === myPubkey).length;
+    const max = latestStats.invites.max_per_member;
+    document.getElementById('invite-remaining').textContent =
+      Math.max(max - mine, 0) + ' of ' + max + ' invites remaining';
+  }
+
+  document.getElementById('ennoble-ctrl').style.display = isLord ? 'block' : 'none';
+  document.getElementById('raid-ctrl').style.display = isLord ? 'block' : 'none';
+  document.getElementById('sec-wards').style.display = isLord ? 'block' : 'none';
+
+  const raidDays = document.getElementById('raid-days');
+  if (isLord && latestStats && !raidDays.value) {
+    raidDays.value = latestStats.outer_lands.ttl_days;
+  }
+}
+
+async function signIn(){
+  if (!window.nostr) {
+    document.getElementById('nip07-help').style.display = 'block';
+    return;
+  }
+  try {
+    myPubkey = await window.nostr.getPublicKey();
+  } catch (e) {
+    alert('Could not read your public key: ' + e.message);
+    return;
+  }
+  isLord = !!latestStats && myPubkey === latestStats.the_lord.pubkey;
+  if (latestTree) renderTree(latestTree); // re-render with this role's stars/remove buttons, and set isMember
+  applySignedInUI();
+  if (isLord) await loadWards();
+}
+
+function signOut(){
+  myPubkey = null;
+  isLord = false;
+  isMember = false;
+  raidPreview = null;
+  document.getElementById('enter-wrap').style.display = 'block';
+  document.getElementById('who-wrap').style.display = 'none';
+  document.getElementById('invite-ctrl').style.display = 'none';
+  document.getElementById('ennoble-ctrl').style.display = 'none';
+  document.getElementById('raid-ctrl').style.display = 'none';
+  document.getElementById('sec-wards').style.display = 'none';
+  if (latestTree) renderTree(latestTree);
+}
+
+// --- Lord-only: wards (never fetched, rendered, or cached for anyone else) ---
+
+async function loadWards(){
+  const el = document.getElementById('wards-list');
+  try {
+    const data = await nip98Fetch('/api/wards', 'GET');
+    el.innerHTML = data.wards.length
+      ? data.wards.map(pk => '<div class="row">' + avatarHTML(null) +
+          '<a class="name" href="' + njumpURL(pk) + '" target="_blank" rel="noopener">' + esc(short(pk)) + '</a>' +
+          '<button class="mini rowctrl" data-action="ward-flip-public" data-pubkey="' + pk + '">make public</button>' +
+          '<button class="mini danger" style="margin-left:6px" data-action="ward-lower" data-pubkey="' + pk + '">lower</button>' +
+          '</div>').join('')
+      : '<span class="empty">no wards yet</span>';
+  } catch (e) {
+    el.innerHTML = '<span class="empty err">could not load</span>';
+  }
+}
+
+// --- mutation actions, wired up through the delegated click handler below ---
+
+async function doInvite(){
+  const pkEl = document.getElementById('invite-pubkey');
+  const labelEl = document.getElementById('invite-label');
+  const pubkey = pkEl.value.trim();
+  if (!pubkey) return;
+  await nip98Fetch('/api/invite', 'POST', {pubkey, label: labelEl.value.trim()});
+  pkEl.value = '';
+  labelEl.value = '';
+  await refreshAll();
+}
+
+async function doRemove(pubkey){
+  if (!confirm('Remove this member? Their entire invite branch falls with them. Their notes survive only until the grace period ends (or the next raid, if manual).')) return;
+  await nip98Fetch('/api/remove', 'POST', {pubkey});
+  await refreshAll();
+}
+
+async function doEnnoble(){
+  const pkEl = document.getElementById('ennoble-pubkey');
+  const pubkey = pkEl.value.trim();
+  if (!pubkey) return;
+  await nip98Fetch('/api/ennoble', 'POST', {pubkey});
+  pkEl.value = '';
+  await refreshAll();
+}
+
+async function doElevate(pubkey, isPublic){
+  await nip98Fetch('/api/elevate', 'POST', {pubkey, public: isPublic});
+  await refreshAll();
+  if (isLord) await loadWards();
+}
+
+async function doLower(pubkey){
+  await nip98Fetch('/api/lower', 'POST', {pubkey});
+  await refreshAll();
+  if (isLord) await loadWards();
+}
+
+async function doWardAdd(){
+  const pkEl = document.getElementById('ward-pubkey');
+  const pubkey = pkEl.value.trim();
+  if (!pubkey) return;
+  await doElevate(pubkey, false);
+  pkEl.value = '';
+}
+
+async function doRaidPreview(){
+  const days = parseInt(document.getElementById('raid-days').value, 10);
+  const resultEl = document.getElementById('raid-result');
+  const confirmRow = document.getElementById('raid-confirm-row');
+  confirmRow.style.display = 'none';
+  raidPreview = null;
+  if (!days || days < 1) {
+    resultEl.textContent = 'enter a whole number of days, 1 or more';
+    return;
+  }
+  resultEl.textContent = 'scanning…';
+  const result = await nip98Fetch('/api/raid', 'POST', {ttl_days: days, dry_run: true});
+  raidPreview = {days, events: result.events};
+  resultEl.textContent = result.events + ' stranger event' + (result.events === 1 ? '' : 's') +
+    ' older than ' + days + ' day' + (days === 1 ? '' : 's') + ' would be purged.';
+  confirmRow.style.display = result.events > 0 ? 'flex' : 'none';
+}
+
+async function doRaidConfirm(){
+  const daysNow = parseInt(document.getElementById('raid-days').value, 10);
+  if (!raidPreview || raidPreview.days !== daysNow) {
+    alert('Preview again before raiding — the day count changed.');
+    return;
+  }
+  if (!confirm('purge stranger events older than ' + raidPreview.days + ' days — ' + raidPreview.events + ' events')) return;
+  const result = await nip98Fetch('/api/raid', 'POST', {ttl_days: raidPreview.days, dry_run: false});
+  document.getElementById('raid-result').textContent = result.events + ' events purged.';
+  document.getElementById('raid-confirm-row').style.display = 'none';
+  raidPreview = null;
+  await refreshAll();
 }
 
 function relayWSURL(){
@@ -340,18 +639,43 @@ async function renderFooter(){
   }
 }
 
-document.getElementById('enter-btn').addEventListener('click', () => {
-  if (window.nostr) {
-    // Phase 6b wires up the full signed-in experience (NIP-07 sign-in,
-    // invites, elevation controls, raid control, wards). This build is
-    // read-only.
-    alert('Sign-in and admin controls are coming soon.');
-  } else {
-    document.getElementById('nip07-help').style.display = 'block';
+document.getElementById('enter-btn').addEventListener('click', signIn);
+document.getElementById('leave-btn').addEventListener('click', signOut);
+
+// One delegated handler for every admin control (invite/remove/star toggles/
+// ennoble/wards/raid) — each carries data-action (+ data-pubkey where a
+// target is needed). preventDefault/stopPropagation here also stops clicks
+// on the star/remove buttons from bubbling into their parent <summary> and
+// toggling the tree's <details> open/closed.
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const action = btn.dataset.action;
+  const pk = btn.dataset.pubkey;
+  btn.disabled = true;
+  try {
+    switch (action) {
+      case 'invite': await doInvite(); break;
+      case 'ennoble': await doEnnoble(); break;
+      case 'remove': await doRemove(pk); break;
+      case 'favorite': await doElevate(pk, true); break;
+      case 'unfavor': await doLower(pk); break;
+      case 'ward-add': await doWardAdd(); break;
+      case 'ward-lower': await doLower(pk); break;
+      case 'ward-flip-public': await doElevate(pk, true); break;
+      case 'raid-preview': await doRaidPreview(); break;
+      case 'raid-confirm': await doRaidConfirm(); break;
+    }
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
   }
 });
 
-boot();
+refreshAll();
 renderFooter();
 </script>
 

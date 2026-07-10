@@ -127,6 +127,9 @@ func TestStats_CitizenAndOuterLandsCounts(t *testing.T) {
 	if stats.OuterLands.Oldest != 50 {
 		t.Fatalf("outer_lands.oldest = %d, want 50", stats.OuterLands.Oldest)
 	}
+	if stats.OuterLands.TTLDays != 30 { // the standing OUTER_TTL_DAYS, so towncrier's raid control can pre-fill it
+		t.Fatalf("outer_lands.ttl_days = %d, want 30", stats.OuterLands.TTLDays)
+	}
 }
 
 // TestStats_LastRaidExcludesDryRuns: stats.json's last_at/last_purged must

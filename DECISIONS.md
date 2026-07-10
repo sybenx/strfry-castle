@@ -225,6 +225,21 @@ notes its revert path; none should be rebuilt without an explicit new call.
   fail to match. The query string is deliberately excluded from the
   comparison — none of the API's endpoints take one, so this can't be
   used to smuggle unsigned parameters past the check.
+- **NIP-98 auth also binds the signature to the request body**, via the
+  spec's standard `payload` tag (sha256 hex of the exact bytes sent) —
+  required whenever a request carries a non-empty body, checked in
+  `authenticate()` (api.go) against the actual bytes read off `r.Body`.
+  CLAUDE.md's NIP-98 checklist doesn't mention it, but building towncrier's
+  Phase 6b raid control (Preview → confirm → POST /api/raid twice, same
+  URL/method, different `dry_run`) surfaced why it's load-bearing: without
+  it, the signature only proves "this pubkey hit this URL with this
+  method," never which body, so two legitimate requests signed in the same
+  wall-clock second are byte-identical events and the replay guard rejects
+  the second as a replay of the first. It also closes a real
+  confused-deputy gap — a captured `Authorization` header could otherwise
+  be resubmitted with an attacker-chosen body (a different invite target,
+  `dry_run` flipped, etc.) before the replay guard consumes it. towncrier's
+  `nip98Fetch` computes and sends the same hash via `crypto.subtle.digest`.
 - **The API's rate limit is a fixed-window 60 requests/minute per IP**
   (steward's `withRateLimit`, `/api/*` only) — CLAUDE.md requires a limit
   but doesn't set a number. Generous enough for a Lord clicking through
@@ -249,6 +264,13 @@ notes its revert path; none should be rebuilt without an explicit new call.
   safe under concurrent writers, and a cron firing during an API mutation
   (or vice versa) is a real scenario once both exist. One lock, held only
   for the read-modify-write section, not the whole request.
+- **`stats.json`'s `outer_lands` gained a `ttl_days` field** (the standing
+  `OUTER_TTL_DAYS`), added in Phase 6b — CLAUDE.md's raid control spec
+  ("days input pre-filled with OUTER_TTL_DAYS") needs the frontend to know
+  that value, and nothing in the schema as originally written exposed it.
+  Not a secret: it's the standing default TTL, already implied publicly by
+  the eviction grace window shown in the Evicted section. Less code than
+  a second public endpoint just to carry one integer.
 
 ## Accepted trade-offs (known, intentional)
 

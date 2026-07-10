@@ -115,7 +115,7 @@ placeholder "Enter the castle" button that explains NIP-07.
 fetches (grep the served payloads in a test, not by eye); payload under
 budget in CI.
 
-## [ ] Phase 6b — towncrier: the NIP-07 layer
+## [x] Phase 6b — towncrier: the NIP-07 layer
 Sign-in, member invite/remove with branch-fall confirm, full Lord controls
 including inline star toggles, ennoble, the raid control (days input
 pre-filled with OUTER_TTL_DAYS → Preview → confirm dialog stating "purge

@@ -181,8 +181,9 @@ type EvictedEntry struct {
 }
 
 type OuterLandsStats struct {
-	Events int   `json:"events"`
-	Oldest int64 `json:"oldest"`
+	Events  int   `json:"events"`
+	Oldest  int64 `json:"oldest"`
+	TTLDays int   `json:"ttl_days"`
 }
 
 // RaidStats.Next is computed from RAID_CRON via Cycle.nextRaidTime
@@ -339,7 +340,7 @@ func (c *Cycle) generateStats(ctx context.Context, state *State, follows Follows
 			Events:  citizenEvents,
 		},
 		Evicted:    evicted,
-		OuterLands: OuterLandsStats{Events: outerEvents, Oldest: outerOldest},
+		OuterLands: OuterLandsStats{Events: outerEvents, Oldest: outerOldest, TTLDays: c.OuterTTLDays},
 		Raids:      raids,
 		Invites:    InviteStats{MaxPerMember: c.MaxInvites, MaxDepth: c.MaxDepth},
 	}

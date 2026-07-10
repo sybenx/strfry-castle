@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,12 +39,21 @@ func newAPIServer(t *testing.T, ownerPub string, now time.Time) *Server {
 	return NewServer(cycle, t.TempDir())
 }
 
-func buildNip98Event(t *testing.T, sec, method, url string, createdAt time.Time) nostr.Event {
+// buildNip98Event signs a NIP-98 event for method+url. When body is
+// non-empty, it also attaches the `payload` tag (sha256 hex of body) that
+// authenticate() now requires for any request carrying a body — mirroring
+// what towncrier's real nip98Fetch sends.
+func buildNip98Event(t *testing.T, sec, method, url string, createdAt time.Time, body []byte) nostr.Event {
 	t.Helper()
+	tags := nostr.Tags{{"u", url}, {"method", method}}
+	if len(body) > 0 {
+		sum := sha256.Sum256(body)
+		tags = append(tags, nostr.Tag{"payload", hex.EncodeToString(sum[:])})
+	}
 	evt := nostr.Event{
 		CreatedAt: nostr.Timestamp(createdAt.Unix()),
 		Kind:      nip98Kind,
-		Tags:      nostr.Tags{{"u", url}, {"method", method}},
+		Tags:      tags,
 		Content:   "",
 	}
 	if err := evt.Sign(sec); err != nil {
@@ -78,7 +90,7 @@ func apiRequest(t *testing.T, method, url string, body []byte, auth string) *htt
 // limiting all included).
 func doRequest(t *testing.T, s *Server, sec, method, url string, body []byte, now time.Time) *httptest.ResponseRecorder {
 	t.Helper()
-	evt := buildNip98Event(t, sec, method, url, now)
+	evt := buildNip98Event(t, sec, method, url, now, body)
 	req := apiRequest(t, method, url, body, authHeader(t, evt))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
@@ -114,7 +126,7 @@ func TestAPI_BadSignatureRejected(t *testing.T) {
 	s := newAPIServer(t, ownerPub, now)
 
 	url := "http://castle.example/api/wards"
-	evt := buildNip98Event(t, ownerSec, "GET", url, now)
+	evt := buildNip98Event(t, ownerSec, "GET", url, now, nil)
 	// Flip one hex digit of the signature: still well-formed hex, just
 	// wrong, so this exercises CheckSignature specifically rather than a
 	// decode failure.
@@ -140,7 +152,7 @@ func TestAPI_StaleCreatedAtRejected(t *testing.T) {
 	s := newAPIServer(t, ownerPub, now)
 
 	url := "http://castle.example/api/wards"
-	evt := buildNip98Event(t, ownerSec, "GET", url, now.Add(-5*time.Minute))
+	evt := buildNip98Event(t, ownerSec, "GET", url, now.Add(-5*time.Minute), nil)
 	req := apiRequest(t, "GET", url, nil, authHeader(t, evt))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
@@ -155,7 +167,7 @@ func TestAPI_ReplayedEventRejected(t *testing.T) {
 	s := newAPIServer(t, ownerPub, now)
 
 	url := "http://castle.example/api/wards"
-	header := authHeader(t, buildNip98Event(t, ownerSec, "GET", url, now))
+	header := authHeader(t, buildNip98Event(t, ownerSec, "GET", url, now, nil))
 
 	w1 := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w1, apiRequest(t, "GET", url, nil, header))
@@ -176,7 +188,7 @@ func TestAPI_URLMismatchRejected(t *testing.T) {
 	s := newAPIServer(t, ownerPub, now)
 
 	// Signed for /api/stats, presented against /api/wards.
-	evt := buildNip98Event(t, ownerSec, "GET", "http://castle.example/api/stats", now)
+	evt := buildNip98Event(t, ownerSec, "GET", "http://castle.example/api/stats", now, nil)
 	req := apiRequest(t, "GET", "http://castle.example/api/wards", nil, authHeader(t, evt))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
@@ -191,12 +203,63 @@ func TestAPI_MethodMismatchRejected(t *testing.T) {
 	s := newAPIServer(t, ownerPub, now)
 
 	url := "http://castle.example/api/wards"
-	evt := buildNip98Event(t, ownerSec, "POST", url, now) // signed for POST
+	evt := buildNip98Event(t, ownerSec, "POST", url, now, nil) // signed for POST
 	req := apiRequest(t, "GET", url, nil, authHeader(t, evt))
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 for a method mismatch", w.Code)
+	}
+}
+
+// TestAPI_BodyPayloadMismatchRejected: the signed event's `payload` tag
+// must match the ACTUAL request body, not just be present. Without this,
+// a captured Authorization header could be replayed against the same
+// URL/method with an attacker-chosen body (e.g. a different invite target,
+// or dry_run flipped on a raid).
+func TestAPI_BodyPayloadMismatchRejected(t *testing.T) {
+	ownerSec, ownerPub := genKeypair(t)
+	now := time.Unix(2_000_000, 0)
+	s := newAPIServer(t, ownerPub, now)
+
+	url := "http://castle.example/api/invite"
+	signedBody := mustJSON(t, inviteRequest{Pubkey: strings.Repeat("a", 64)})
+	sentBody := mustJSON(t, inviteRequest{Pubkey: strings.Repeat("b", 64)})
+	evt := buildNip98Event(t, ownerSec, "POST", url, now, signedBody)
+	req := apiRequest(t, "POST", url, sentBody, authHeader(t, evt))
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 when the payload tag doesn't match the actual body", w.Code)
+	}
+}
+
+// TestAPI_DistinctBodiesSameSecondBothSucceed is the regression this fix
+// targets directly: towncrier's raid control signs a preview
+// (dry_run:true) and, on confirm, an immediate follow-up
+// (dry_run:false) — both POST /api/raid, often within the same
+// wall-clock second. Before binding the signature to the body via the
+// `payload` tag, these two legitimate, distinct requests produced
+// byte-identical NIP-98 events, and the replay guard rejected the second
+// one as a replay of the first.
+func TestAPI_DistinctBodiesSameSecondBothSucceed(t *testing.T) {
+	ownerSec, ownerPub := genKeypair(t)
+	now := time.Unix(3_000_000, 0)
+	s := newAPIServer(t, ownerPub, now)
+	s.Cycle.Scanner = &fakeScanner{}
+	s.Cycle.CLI = &fakeStrfryCLI{}
+
+	url := "http://castle.example/api/raid"
+	previewBody := mustJSON(t, raidRequest{DryRun: true, TTLDays: intPtr(30)})
+	confirmBody := mustJSON(t, raidRequest{DryRun: false, TTLDays: intPtr(30)})
+
+	w1 := doRequest(t, s, ownerSec, "POST", url, previewBody, now)
+	if w1.Code != http.StatusOK {
+		t.Fatalf("preview status = %d, body = %s", w1.Code, w1.Body.String())
+	}
+	w2 := doRequest(t, s, ownerSec, "POST", url, confirmBody, now)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d, want 200 (a distinct body must not trip the replay guard), body = %s", w2.Code, w2.Body.String())
 	}
 }
 

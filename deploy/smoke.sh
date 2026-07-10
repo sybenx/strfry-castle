@@ -238,14 +238,33 @@ echo "==> smoke: steward's HTTP API is up"
 
 API_BODY=$(mktemp)
 
+# sha256_hex reads stdin and prints its sha256 as lowercase hex, using
+# whichever of sha256sum (Linux/CI) or shasum (macOS) is present.
+sha256_hex() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum | awk '{print $1}'
+	else
+		shasum -a 256 | awk '{print $1}'
+	fi
+}
+
 # nip98_header builds an `Authorization: Nostr <base64 kind-27235 event>`
 # header signed by sec for method+url, using nak (the same signer nak curl
 # wraps, but invoked directly here so this script isn't at the mercy of
-# that subcommand's argument parsing).
+# that subcommand's argument parsing). When data is given, the event also
+# carries NIP-98's `payload` tag (sha256 hex of data) — authenticate()
+# (api.go) requires it for any request with a body, binding the signature
+# to the exact bytes sent rather than just the URL+method.
 nip98_header() {
-	local sec="$1" method="$2" url="$3"
+	local sec="$1" method="$2" url="$3" data="${4:-}"
 	local evt
-	evt=$(nak event -k 27235 -c "" -t u="$url" -t method="$method" --sec "$sec" -q)
+	if [ -n "$data" ]; then
+		local hash
+		hash=$(printf '%s' "$data" | sha256_hex)
+		evt=$(nak event -k 27235 -c "" -t u="$url" -t method="$method" -t payload="$hash" --sec "$sec" -q)
+	else
+		evt=$(nak event -k 27235 -c "" -t u="$url" -t method="$method" --sec "$sec" -q)
+	fi
 	printf 'Authorization: Nostr %s' "$(printf '%s' "$evt" | base64 | tr -d '\n')"
 }
 
@@ -256,7 +275,7 @@ api_call() {
 	local method="$1" path="$2" sec="$3" data="${4:-}"
 	local url="http://localhost:8787$path"
 	local auth
-	auth=$(nip98_header "$sec" "$method" "$url")
+	auth=$(nip98_header "$sec" "$method" "$url" "$data")
 	if [ -n "$data" ]; then
 		curl -s -o "$API_BODY" -w '%{http_code}' -X "$method" -H "$auth" -H 'Content-Type: application/json' -d "$data" "$url"
 	else

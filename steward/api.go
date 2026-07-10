@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -232,7 +234,20 @@ type authIdentity struct {
 // authenticate verifies r's `Authorization: Nostr <base64 kind-27235
 // event>` header per NIP-98: signature, `u` tag matches the full request
 // URL, `method` tag matches the HTTP method, created_at within ±60s, and
-// the event id hasn't been seen in the last 5 minutes.
+// the event id hasn't been seen in the last 5 minutes. If r has a non-empty
+// body, the event's `payload` tag must also match its sha256 hex digest.
+//
+// Without the payload check, the signature only authorizes "this pubkey hit
+// this URL with this method" — never the body. Two structurally identical
+// requests to the same mutating endpoint (e.g. towncrier's raid Preview
+// immediately followed by its Raid confirm, both POST /api/raid) sign
+// byte-identical events when they land in the same wall-clock second,
+// which trips the replay guard on the second, legitimate request. Worse,
+// nothing stops a captured Authorization header being resubmitted with a
+// swapped body — an intercepted /api/invite header replayed with a
+// different target pubkey, or /api/raid with dry_run flipped. Binding the
+// signature to a hash of the body (NIP-98's standard `payload` tag) closes
+// both.
 func (s *Server) authenticate(r *http.Request) (authIdentity, error) {
 	header := r.Header.Get("Authorization")
 	const prefix = "Nostr "
@@ -270,6 +285,21 @@ func (s *Server) authenticate(r *http.Request) (authIdentity, error) {
 	}
 	if uTag[1] != requestURL(r) {
 		return authIdentity{}, errUnauthorized
+	}
+
+	if r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return authIdentity{}, errUnauthorized
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if len(body) > 0 {
+			sum := sha256.Sum256(body)
+			payloadTag := evt.Tags.Find("payload")
+			if payloadTag == nil || payloadTag[1] != hex.EncodeToString(sum[:]) {
+				return authIdentity{}, errUnauthorized
+			}
+		}
 	}
 
 	ok, err := evt.CheckSignature()
