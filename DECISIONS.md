@@ -209,6 +209,46 @@ notes its revert path; none should be rebuilt without an explicit new call.
   CYCLE_MINUTES) so they can't drift or be missed by an unrelated loop;
   they always use the default OUTER_TTL_DAYS (no override) and still honor
   RAID_DRY_RUN like any other raid.
+- **"CORS: same-origin only" means emitting zero `Access-Control-Allow-*`
+  headers, not an allowlist.** The mutation endpoints require both a JSON
+  body and a custom `Authorization` header, which forces any cross-origin
+  fetch/XHR into a CORS preflight; with no CORS headers at all, the browser
+  refuses it itself. The correct amount of CORS code for "same-origin
+  only" is zero — adding headers here would only widen the policy that not
+  writing them already enforces.
+- **NIP-98's `u` tag is matched against `scheme://host+path` reconstructed
+  from the request, trusting `X-Forwarded-Proto` when present** — steward
+  sits behind a reverse proxy that terminates TLS (CLAUDE.md's "Reverse
+  proxy" section), so the connection steward sees is always plain HTTP;
+  without trusting the forwarded-proto header, every signed request's `u`
+  tag (correctly `https://...`, since that's the real public URL) would
+  fail to match. The query string is deliberately excluded from the
+  comparison — none of the API's endpoints take one, so this can't be
+  used to smuggle unsigned parameters past the check.
+- **The API's rate limit is a fixed-window 60 requests/minute per IP**
+  (steward's `withRateLimit`, `/api/*` only) — CLAUDE.md requires a limit
+  but doesn't set a number. Generous enough for a Lord clicking through
+  towncrier's UI (each click signs and fires one request), tight enough to
+  blunt a script hammering the signed endpoints. A fixed window over a
+  sliding one: less code, and the abuse case here is "someone finds the
+  API and pounds it," not a precision traffic-shaping problem.
+- **Every mutation endpoint's success body is `{"ok":true,"changed":bool}`**
+  (invite/remove/ennoble/elevate/lower) — CLAUDE.md doesn't specify a
+  response shape for these. `changed` surfaces the true-no-op case
+  (re-elevating the same visibility, lowering someone not elevated)
+  without the caller needing to diff state before and after the call.
+- **`/api/tree`'s JSON shape** (`{owner, members[], favored[], evicted[]}`,
+  each entry carrying the kind-0 name/picture already resolved) is this
+  phase's concrete answer to CLAUDE.md's prose description, written down
+  here so Phase 6a's towncrier can be built against a stable contract
+  rather than reverse-engineering api.go.
+- **Every ledger-mutating handler and the API's raid trigger share one
+  mutex (`Server.mu`)**, and `RAID_CRON`'s scheduled firing (main.go) takes
+  the same lock before calling `Cycle.Raid` — ledger.jsonl's
+  read-then-append pattern (read, build state, mutate, append) is not
+  safe under concurrent writers, and a cron firing during an API mutation
+  (or vice versa) is a real scenario once both exist. One lock, held only
+  for the read-modify-write section, not the whole request.
 
 ## Accepted trade-offs (known, intentional)
 

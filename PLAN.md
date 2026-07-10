@@ -91,7 +91,7 @@ deletes nothing and returns nonzero events," "evicted member survives the
 grace window, dies after," "grace survives a smaller override," "override
 respected / absent uses default / 0 rejected / ledger records ttl."
 
-## [ ] Phase 5 — HTTP API
+## [x] Phase 5 — HTTP API
 NIP-98 verification (sig, u, method, ±60s, 5-min replay guard), all
 endpoints from CLAUDE.md including /api/wards (Lord only), /api/elevate,
 /api/lower, /api/raid (with ttl_days + dry_run body); immediate state

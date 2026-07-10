@@ -3,15 +3,16 @@
 // towncrier's static files, so there is no separate web container. See
 // CLAUDE.md, Component 2.
 //
-// As of Phase 4 this runs the cycle loop (follows sync, ledger merge,
-// stats) plus raids (manual, via Cycle.Raid, and scheduled via RAID_CRON).
-// The HTTP API lands in Phase 5.
+// As of Phase 5 this runs the cycle loop (follows sync, ledger merge,
+// stats), raids (manual via the HTTP API, and scheduled via RAID_CRON), and
+// the signed HTTP API + towncrier's static files.
 package main
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,6 +23,15 @@ import (
 
 	"github.com/robfig/cron/v3"
 )
+
+// httpShutdownTimeout bounds how long main() waits for in-flight requests
+// to finish on SIGINT/SIGTERM before forcing the listener closed.
+const httpShutdownTimeout = 5 * time.Second
+
+// towncrierDir is where main.go looks for towncrier's static files,
+// relative to steward's working directory (deploy/docker-compose.yml sets
+// the container's workdir accordingly).
+const towncrierDir = "towncrier"
 
 // buildVersion is stats.json's version.running. Set via
 // `-ldflags "-X main.buildVersion=..."` at build time (see Makefile);
@@ -158,6 +168,7 @@ func main() {
 	defer stop()
 
 	cycle := NewCycle(cfg, relayFetcher{}, &dockerStrfryScanner{Container: cfg.StrfryContainer}, &dockerStrfryCLI{Container: cfg.StrfryContainer}, githubReleaseChecker{})
+	server := NewServer(cycle, towncrierDir)
 
 	runCycle := func() {
 		if err := cycle.Run(ctx); err != nil {
@@ -169,11 +180,16 @@ func main() {
 
 	// RAID_CRON is optional: empty (the default) means manual raids only.
 	// Scheduled raids always use the standing OUTER_TTL_DAYS (no override)
-	// and honor RAID_DRY_RUN like any other raid.
+	// and honor RAID_DRY_RUN like any other raid. Guarded by server.mu, the
+	// same lock the HTTP API's mutations and raids use, so a cron firing
+	// can never race an API request on ledger.jsonl.
 	if cfg.RaidCron != "" {
 		scheduler := cron.New()
 		_, err := scheduler.AddFunc(cfg.RaidCron, func() {
-			if _, err := cycle.Raid(ctx, nil, false, "cron"); err != nil {
+			server.mu.Lock()
+			_, err := cycle.Raid(ctx, nil, false, "cron")
+			server.mu.Unlock()
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "steward: scheduled raid failed: %v\n", err)
 			}
 		})
@@ -184,6 +200,20 @@ func main() {
 			defer scheduler.Stop()
 		}
 	}
+
+	httpServer := &http.Server{Addr: cfg.Listen, Handler: server.Handler()}
+	go func() {
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "steward: http server: %v\n", err)
+		}
+	}()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "steward: http server shutdown: %v\n", err)
+		}
+	}()
 
 	ticker := time.NewTicker(time.Duration(cfg.CycleMinutes) * time.Minute)
 	defer ticker.Stop()

@@ -34,6 +34,7 @@ done
 NETWORK=castle-smoke
 VOLUME_STATE=castle-state
 VOLUME_DB=castle-smoke-db
+API_BODY="" # set to a mktemp path once the API test section starts
 
 case "$(uname -m)" in
 	arm64|aarch64) ARCH=arm64 ;;
@@ -48,9 +49,10 @@ fi
 
 cleanup() {
 	echo "==> smoke: tearing down"
-	docker rm -f castle-smoke-steward castle-smoke-strfry >/dev/null 2>&1 || true
+	docker rm -f castle-smoke-steward castle-smoke-steward-api castle-smoke-strfry >/dev/null 2>&1 || true
 	docker network rm "$NETWORK" >/dev/null 2>&1 || true
 	docker volume rm "$VOLUME_STATE" "$VOLUME_DB" >/dev/null 2>&1 || true
+	rm -f "$API_BODY" 2>/dev/null || true
 }
 trap cleanup EXIT
 cleanup >/dev/null 2>&1 || true # in case a previous run left something behind
@@ -187,5 +189,170 @@ if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
 echo "==> smoke: citizens.json, stats.json, and name-cache.json all reflect the real cycle correctly"
+
+# --- Phase 5: the HTTP API, driven with curl + nak-signed NIP-98 headers ---
+# See PLAN.md's Phase 5 acceptance criterion: "curl + nak-signed headers can
+# invite, remove, ennoble, elevate, lower, and trigger a dry-run raid
+# end-to-end against the compose stack; /api/wards refuses a non-Lord
+# signature."
+
+echo "==> smoke: generating API-test fixture keys"
+MEMBER_SEC=$(nak key generate); MEMBER_PUB=$(nak key public "$MEMBER_SEC")
+NONLORD_SEC=$(nak key generate); NONLORD_PUB=$(nak key public "$NONLORD_SEC")
+OLDSTRANGER_SEC=$(nak key generate); OLDSTRANGER_PUB=$(nak key public "$OLDSTRANGER_SEC")
+echo "    member=$MEMBER_PUB nonlord=$NONLORD_PUB oldstranger=$OLDSTRANGER_PUB"
+
+# STRFRY_CONTAINER doubles as the websocket hostname, and the raid endpoint
+# needs a live docker.sock exec into strfry, same as the cycle container
+# above — but this one stays up for the whole API test section instead of
+# being a one-shot.
+echo "==> smoke: starting a long-lived steward for the HTTP API"
+docker run -d --name castle-smoke-steward-api \
+	--network "$NETWORK" \
+	-p 8787:8787 \
+	-v "$VOLUME_STATE":/state \
+	-v "$BIN_DIR":/bin/castle:ro \
+	-v /var/run/docker.sock:/var/run/docker.sock \
+	-e OWNER_PUBKEY="$OWNER_PUB" \
+	-e STRFRY_CONTAINER=castle-smoke-strfry \
+	-e PUBLIC_RELAYS= \
+	-e CYCLE_MINUTES=60 \
+	--entrypoint /bin/castle/steward \
+	docker:cli >/dev/null
+
+echo "==> smoke: waiting for the HTTP API to accept connections"
+api_up=false
+for i in $(seq 1 30); do
+	if curl -sf http://localhost:8787/api/stats >/dev/null 2>&1; then
+		api_up=true
+		break
+	fi
+	sleep 1
+done
+if [ "$api_up" != true ]; then
+	echo "==> smoke: FAIL — steward's HTTP API never came up" >&2
+	docker logs castle-smoke-steward-api || true
+	exit 1
+fi
+echo "==> smoke: steward's HTTP API is up"
+
+API_BODY=$(mktemp)
+
+# nip98_header builds an `Authorization: Nostr <base64 kind-27235 event>`
+# header signed by sec for method+url, using nak (the same signer nak curl
+# wraps, but invoked directly here so this script isn't at the mercy of
+# that subcommand's argument parsing).
+nip98_header() {
+	local sec="$1" method="$2" url="$3"
+	local evt
+	evt=$(nak event -k 27235 -c "" -t u="$url" -t method="$method" --sec "$sec" -q)
+	printf 'Authorization: Nostr %s' "$(printf '%s' "$evt" | base64 | tr -d '\n')"
+}
+
+# api_call METHOD PATH SEC [JSON_BODY]: signs a fresh NIP-98 header for the
+# request and prints the HTTP status code; the response body lands in
+# $API_BODY for the caller to inspect.
+api_call() {
+	local method="$1" path="$2" sec="$3" data="${4:-}"
+	local url="http://localhost:8787$path"
+	local auth
+	auth=$(nip98_header "$sec" "$method" "$url")
+	if [ -n "$data" ]; then
+		curl -s -o "$API_BODY" -w '%{http_code}' -X "$method" -H "$auth" -H 'Content-Type: application/json' -d "$data" "$url"
+	else
+		curl -s -o "$API_BODY" -w '%{http_code}' -X "$method" -H "$auth" "$url"
+	fi
+}
+
+tree_has_member() {
+	docker run --rm -v "$VOLUME_STATE":/state alpine:3 cat /state/tree.json 2>/dev/null | jq -e --arg pk "$1" '.members | has($pk)' >/dev/null 2>&1
+}
+
+fail=0
+
+echo "==> smoke: API — invite"
+code=$(api_call POST /api/invite "$OWNER_SEC" "{\"pubkey\":\"$MEMBER_PUB\",\"label\":\"smoke-member\"}")
+if [ "$code" != "200" ]; then
+	echo "==> smoke: FAIL — invite returned $code: $(cat "$API_BODY")" >&2
+	fail=1
+fi
+if ! tree_has_member "$MEMBER_PUB"; then
+	echo "==> smoke: FAIL — tree.json missing the invited member immediately after invite (state must rewrite without waiting for the next cycle)" >&2
+	fail=1
+fi
+
+echo "==> smoke: API — ennoble"
+code=$(api_call POST /api/ennoble "$OWNER_SEC" "{\"pubkey\":\"$STRANGER_PUB\"}")
+if [ "$code" != "200" ]; then
+	echo "==> smoke: FAIL — ennoble returned $code: $(cat "$API_BODY")" >&2
+	fail=1
+fi
+if ! tree_has_member "$STRANGER_PUB"; then
+	echo "==> smoke: FAIL — tree.json missing the ennobled stranger" >&2
+	fail=1
+fi
+
+echo "==> smoke: API — elevate (favorite) and lower"
+code=$(api_call POST /api/elevate "$OWNER_SEC" "{\"pubkey\":\"$MEMBER_PUB\",\"public\":true}")
+if [ "$code" != "200" ]; then
+	echo "==> smoke: FAIL — elevate returned $code: $(cat "$API_BODY")" >&2
+	fail=1
+fi
+code=$(api_call POST /api/lower "$OWNER_SEC" "{\"pubkey\":\"$MEMBER_PUB\"}")
+if [ "$code" != "200" ]; then
+	echo "==> smoke: FAIL — lower returned $code: $(cat "$API_BODY")" >&2
+	fail=1
+fi
+
+echo "==> smoke: API — remove"
+code=$(api_call POST /api/remove "$OWNER_SEC" "{\"pubkey\":\"$MEMBER_PUB\"}")
+if [ "$code" != "200" ]; then
+	echo "==> smoke: FAIL — remove returned $code: $(cat "$API_BODY")" >&2
+	fail=1
+fi
+if tree_has_member "$MEMBER_PUB"; then
+	echo "==> smoke: FAIL — tree.json still has the removed member" >&2
+	fail=1
+fi
+
+echo "==> smoke: API — /api/wards refuses a non-Lord signature and succeeds for the Lord"
+code=$(api_call GET /api/wards "$NONLORD_SEC")
+if [ "$code" != "403" ]; then
+	echo "==> smoke: FAIL — /api/wards for a non-Lord returned $code, want 403" >&2
+	fail=1
+fi
+code=$(api_call GET /api/wards "$OWNER_SEC")
+if [ "$code" != "200" ]; then
+	echo "==> smoke: FAIL — /api/wards for the Lord returned $code: $(cat "$API_BODY")" >&2
+	fail=1
+fi
+
+echo "==> smoke: API — raid dry-run preview"
+# Every other fixture note was published seconds ago, so no positive
+# ttl_days would ever catch them; back-date one stranger's note so the
+# 30-day raid preview has something real to find.
+OLD_TS=$(($(date +%s) - 40 * 86400))
+nak event -k 1 -c "an old stranger's note" --sec "$OLDSTRANGER_SEC" --ts "$OLD_TS" -q ws://localhost:7777 >/dev/null
+code=$(api_call POST /api/raid "$OWNER_SEC" '{"dry_run":true,"ttl_days":30}')
+if [ "$code" != "200" ]; then
+	echo "==> smoke: FAIL — raid dry-run returned $code: $(cat "$API_BODY")" >&2
+	fail=1
+elif [ "$(jq -r '.events' "$API_BODY")" -lt 1 ]; then
+	echo "==> smoke: FAIL — raid dry-run should report the backdated stranger's event: $(cat "$API_BODY")" >&2
+	fail=1
+fi
+if ! nak req -l 10 ws://localhost:7777 2>/dev/null | jq -s -e --arg pk "$OLDSTRANGER_PUB" 'map(select(.pubkey == $pk)) | length > 0' >/dev/null; then
+	echo "==> smoke: FAIL — raid dry-run must not have deleted the backdated stranger's note" >&2
+	fail=1
+fi
+
+docker stop castle-smoke-steward-api >/dev/null
+docker logs castle-smoke-steward-api 2>&1 | sed 's/^/    steward-api: /' || true
+docker rm castle-smoke-steward-api >/dev/null
+
+if [ "$fail" -ne 0 ]; then
+	exit 1
+fi
+echo "==> smoke: invite, ennoble, elevate, lower, remove, wards, and a dry-run raid all work end-to-end through the signed HTTP API"
 
 echo "==> smoke: all checks passed"
