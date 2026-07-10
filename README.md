@@ -56,7 +56,7 @@ for a newer tag than the one below):
 ```yaml
 services:
   steward:
-    image: ghcr.io/sybenx/castle-steward:v0.4.0
+    image: ghcr.io/sybenx/castle-steward:v0.4.1
     depends_on:
       - strfry               # your strfry service/container name
     env_file: .env

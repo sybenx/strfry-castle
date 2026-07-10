@@ -31,7 +31,7 @@ services:
     # specific release rather than :latest so this reference stack doesn't
     # silently move out from under anyone; `make smoke` still builds and
     # runs the steward binary directly rather than through this service.
-    image: ghcr.io/sybenx/castle-steward:v0.4.0
+    image: ghcr.io/sybenx/castle-steward:v0.4.1
     depends_on:
       - strfry
     environment:
