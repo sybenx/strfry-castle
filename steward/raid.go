@@ -74,7 +74,7 @@ func (d *dockerStrfryCLI) DeleteByAuthors(ctx context.Context, pubkeys []string,
 // ErrInvalidTTLDays is returned when a per-raid ttl_days override is
 // present but not a positive integer. CLAUDE.md: "Clamp: reject 0,
 // negative, or non-integer with 400, nothing runs."
-var ErrInvalidTTLDays = errors.New("raid: ttl_days must be >= 1")
+var ErrInvalidTTLDays = errors.New("ttl_days must be >= 1")
 
 // RaidResult is what one raid execution found: the count of stranger
 // events purged (or, for a dry run, that would be purged) — exactly the

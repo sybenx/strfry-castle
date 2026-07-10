@@ -90,19 +90,19 @@ button.mini.primary:hover{background:var(--gold)}
 </svg>
 <div>
   <h1>The Castle</h1>
-  <p id="tagline">a permanent home for those the Lord trusts</p>
+  <p id="tagline">a permanent home for those the owner trusts</p>
 </div>
 </header>
 
 <main>
 
 <section id="sec-lord">
-  <h2>The Lord</h2>
+  <h2>Owner</h2>
   <div id="lord-row" class="row"><span class="empty">loading&hellip;</span></div>
 </section>
 
 <section id="sec-court">
-  <h2>The Court</h2>
+  <h2>Members</h2>
   <div id="court-tree"><span class="empty">loading&hellip;</span></div>
   <div class="ctrl" id="invite-ctrl" style="display:none">
     <h3>Invite</h3>
@@ -114,48 +114,48 @@ button.mini.primary:hover{background:var(--gold)}
     <div class="hint" id="invite-remaining"></div>
   </div>
   <div class="ctrl" id="ennoble-ctrl" style="display:none">
-    <h3>Ennoble</h3>
+    <h3>Pin</h3>
     <div class="ctrl-row">
       <input class="txt" id="ennoble-pubkey" placeholder="npub or hex pubkey">
-      <button class="mini primary" data-action="ennoble">Ennoble</button>
+      <button class="mini primary" data-action="ennoble">Pin member</button>
     </div>
     <div class="hint">Adds someone straight to the tree as your direct invitee — tree membership then holds even if they're later unfollowed.</div>
   </div>
 </section>
 
 <section id="sec-favored">
-  <h2>Favored of the Lord</h2>
+  <h2>Pinned members</h2>
   <div id="favored-list"><span class="empty">loading&hellip;</span></div>
 </section>
 
 <section id="sec-citizenry">
-  <h2>The Citizenry</h2>
+  <h2>Summary</h2>
   <div class="stats-grid" id="citizenry-stats"><span class="empty">loading&hellip;</span></div>
 </section>
 
 <section id="sec-evicted">
-  <h2>The Evicted</h2>
+  <h2>Grace period</h2>
   <div id="evicted-list"><span class="empty">loading&hellip;</span></div>
 </section>
 
 <section id="sec-wards">
-  <h2>The Wards</h2>
-  <p class="note" style="margin-top:0">Wards are protected like favorites but shown to no one but the Lord.</p>
+  <h2>Private protections</h2>
+  <p class="note" style="margin-top:0">Protected like pinned members, visible only to you.</p>
   <div id="wards-list"><span class="empty">loading&hellip;</span></div>
   <div class="ctrl">
     <div class="ctrl-row">
-      <input class="txt" id="ward-pubkey" placeholder="npub or hex pubkey to ward">
-      <button class="mini primary" data-action="ward-add">Add ward</button>
+      <input class="txt" id="ward-pubkey" placeholder="npub or hex pubkey">
+      <button class="mini primary" data-action="ward-add">Add protection</button>
     </div>
   </div>
 </section>
 
 <section id="sec-outerlands">
-  <h2>The Outer Lands</h2>
+  <h2>Unprotected events</h2>
   <div class="stats-grid" id="outerlands-stats"><span class="empty">loading&hellip;</span></div>
-  <p class="note">The Outer Lands are open to all. Events here survive until the next raid, at which point strangers' notes older than the standing limit are swept away — the invited, the followed, and the favored are never touched.</p>
+  <p class="note">Unprotected events are open to all. They survive until the next purge, at which point events older than the standing limit are removed — members, follows, and pinned protections are never touched.</p>
   <div class="ctrl" id="raid-ctrl" style="display:none">
-    <h3>The Raid</h3>
+    <h3>Purge</h3>
     <div class="ctrl-row">
       <label for="raid-days" class="hint">purge strangers' notes older than</label>
       <input class="txt narrow" type="number" min="1" step="1" id="raid-days">
@@ -164,7 +164,7 @@ button.mini.primary:hover{background:var(--gold)}
     </div>
     <div class="hint" id="raid-result"></div>
     <div class="ctrl-row" id="raid-confirm-row" style="display:none">
-      <button class="mini danger" data-action="raid-confirm">Raid</button>
+      <button class="mini danger" data-action="raid-confirm">Purge</button>
     </div>
   </div>
 </section>
@@ -172,9 +172,9 @@ button.mini.primary:hover{background:var(--gold)}
 <section id="sec-dms">
   <p class="note" style="margin-top:0">
     <strong>A note on private messages:</strong> gift-wrapped DMs (NIP-59) are
-    signed by random one-time keys, so this relay cannot tell the Lord's own
-    messages from a stranger's. All gift wraps age out at the next raid like
-    any other Outer Lands event. For permanent, private message storage, use
+    signed by random one-time keys, so this relay cannot tell the owner's own
+    messages from a stranger's. All gift wraps age out at the next purge like
+    any other unprotected event. For permanent, private message storage, use
     a dedicated relay built for that purpose.
   </p>
 </section>
@@ -242,7 +242,7 @@ function memberRow(pk, name, picture, extraClass, starred){
   return '<div class="row' + (extraClass ? ' ' + extraClass : '') + '">' +
     avatarHTML(picture) +
     '<a class="name" href="' + njumpURL(pk) + '" target="_blank" rel="noopener">' + label + '</a>' +
-    (starred ? '<span class="star" title="a favorite of the Lord">★</span>' : '') +
+    (starred ? '<span class="star" title="pinned by the owner">★</span>' : '') +
     '</div>';
 }
 
@@ -265,7 +265,7 @@ function fmtAge(unixSeconds){
 }
 
 function fmtExpiry(unixSeconds, raidsAreManual){
-  if (raidsAreManual) return 'until the next raid';
+  if (raidsAreManual) return 'until the next purge';
   const days = Math.ceil((unixSeconds - Date.now()/1000) / 86400);
   if (days <= 0) return 'any moment now';
   if (days === 1) return 'in 1 day';
@@ -300,10 +300,10 @@ function renderTree(data){
     let star;
     if (isLord) {
       star = '<button class="starbtn" data-action="' + (m.favorite ? 'unfavor' : 'favorite') +
-        '" data-pubkey="' + m.pubkey + '" title="' + (m.favorite ? 'remove favorite' : 'make a favorite') + '">' +
+        '" data-pubkey="' + m.pubkey + '" title="' + (m.favorite ? 'unpin' : 'pin') + '">' +
         (m.favorite ? '★' : '☆') + '</button>';
     } else {
-      star = m.favorite ? '<span class="star" title="a favorite of the Lord">★</span>' : '';
+      star = m.favorite ? '<span class="star" title="pinned by the owner">★</span>' : '';
     }
     const remove = (myPubkey && (isLord || m.invited_by === myPubkey))
       ? '<button class="mini danger rowctrl" data-action="remove" data-pubkey="' + m.pubkey + '">remove</button>'
@@ -322,7 +322,7 @@ function renderTree(data){
   const courtEl = document.getElementById('court-tree');
   courtEl.innerHTML = roots.length
     ? roots.map(renderNode).join('')
-    : '<span class="empty">the Lord has invited no one yet</span>';
+    : '<span class="empty">the owner has invited no one yet</span>';
 
   // Favored (non-tree-member favorites)
   const favoredEl = document.getElementById('favored-list');
@@ -346,12 +346,12 @@ function renderStats(stats){
   document.getElementById('citizenry-stats').innerHTML = [
     ['Tree', stats.citizens.tree],
     ['Follows', stats.citizens.follows],
-    ['Favored', stats.citizens.favored],
+    ['Pinned', stats.citizens.favored],
     ['Events stored', stats.citizens.events],
   ].map(([l,n]) => '<div class="stat"><div class="n">' + esc(n) + '</div><div class="l">' + esc(l) + '</div></div>').join('');
 
   const nextRaid = raidsAreManual
-    ? 'at the Lord’s pleasure'
+    ? 'Manual only'
     : new Date(stats.raids.next * 1000).toLocaleString();
   const lastRaid = stats.raids.last_at
     ? fmtAge(stats.raids.last_at) + ' ago (' + (stats.raids.last_purged || 0) + ' purged)'
@@ -360,8 +360,8 @@ function renderStats(stats){
   document.getElementById('outerlands-stats').innerHTML = [
     ['Events', stats.outer_lands.events],
     ['Oldest event', fmtAge(stats.outer_lands.oldest)],
-    ['Next raid', nextRaid],
-    ['Last raid', lastRaid],
+    ['Next purge', nextRaid],
+    ['Last purge', lastRaid],
   ].map(([l,n]) => '<div class="stat"><div class="n">' + esc(n) + '</div><div class="l">' + esc(l) + '</div></div>').join('');
 
   const oldBanner = document.getElementById('version-banner');
@@ -454,7 +454,7 @@ function applySignedInUI(){
   document.getElementById('who-wrap').style.display = 'block';
   document.getElementById('who-name').textContent = short(myPubkey);
   document.getElementById('who-role').textContent =
-    isLord ? ' (the Lord)' : (isMember ? ' (a member of the Court)' : ' (not yet a member)');
+    isLord ? ' (owner)' : (isMember ? ' (member)' : ' (not yet a member)');
 
   const canInvite = isLord || isMember;
   document.getElementById('invite-ctrl').style.display = canInvite ? 'block' : 'none';
@@ -518,7 +518,7 @@ async function loadWards(){
           '<button class="mini rowctrl" data-action="ward-flip-public" data-pubkey="' + pk + '">make public</button>' +
           '<button class="mini danger" style="margin-left:6px" data-action="ward-lower" data-pubkey="' + pk + '">lower</button>' +
           '</div>').join('')
-      : '<span class="empty">no wards yet</span>';
+      : '<span class="empty">no private protections yet</span>';
   } catch (e) {
     el.innerHTML = '<span class="empty err">could not load</span>';
   }
@@ -538,7 +538,7 @@ async function doInvite(){
 }
 
 async function doRemove(pubkey){
-  if (!confirm('Remove this member? Their entire invite branch falls with them. Their notes survive only until the grace period ends (or the next raid, if manual).')) return;
+  if (!confirm('Remove this member? Their entire invite branch falls with them. Their notes survive only until the grace period ends (or the next purge, if manual).')) return;
   await nip98Fetch('/api/remove', 'POST', {pubkey});
   await refreshAll();
 }
@@ -593,7 +593,7 @@ async function doRaidPreview(){
 async function doRaidConfirm(){
   const daysNow = parseInt(document.getElementById('raid-days').value, 10);
   if (!raidPreview || raidPreview.days !== daysNow) {
-    alert('Preview again before raiding — the day count changed.');
+    alert('Preview again before purging — the day count changed.');
     return;
   }
   if (!confirm('purge stranger events older than ' + raidPreview.days + ' days — ' + raidPreview.events + ' events')) return;

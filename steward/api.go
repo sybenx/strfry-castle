@@ -347,7 +347,7 @@ func (s *Server) requireLord(w http.ResponseWriter, r *http.Request) (authIdenti
 		return authIdentity{}, false
 	}
 	if auth.Pubkey != s.Cycle.Owner {
-		writeError(w, http.StatusForbidden, "the Lord's signature is required")
+		writeError(w, http.StatusForbidden, "the owner's signature is required")
 		return authIdentity{}, false
 	}
 	return auth, true
