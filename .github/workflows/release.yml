@@ -1,0 +1,76 @@
+name: Release
+
+# Tag push (vX.Y.Z) is the only trigger — see PLAN.md Phase 7. Builds the
+# static steward binaries via the same Makefile target CI already
+# exercises, attaches them + checksums to a GitHub Release, and pushes a
+# multi-arch ghcr.io image built from the repo Dockerfile.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/sybenx/castle-steward
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: make test
+        run: make test
+
+      - name: make build
+        run: make build
+
+      - name: make bytecheck
+        run: make bytecheck
+
+      - name: package binaries + checksums
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            tar -C bin/linux-$arch -czf dist/steward-linux-$arch.tar.gz steward
+          done
+          ( cd dist && sha256sum steward-linux-*.tar.gz > checksums.txt )
+
+      - name: create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/steward-linux-amd64.tar.gz \
+            dist/steward-linux-arm64.tar.gz \
+            dist/checksums.txt \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: build and push multi-arch image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          # Registers QEMU handlers for cross-arch emulation under buildx —
+          # the same mechanism docker/setup-qemu-action wraps, called
+          # directly to avoid pulling in another GitHub Action for one
+          # docker run.
+          docker run --rm --privileged tonistiigi/binfmt --install all
+          docker buildx create --use
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="$GITHUB_REF_NAME" \
+            -t "$IMAGE:$GITHUB_REF_NAME" \
+            -t "$IMAGE:latest" \
+            --push .

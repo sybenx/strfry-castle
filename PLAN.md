@@ -126,7 +126,7 @@ the Lord-only Wards section fed exclusively by authenticated /api/wards
 browser; a non-Lord sign-in shows no ward UI and no ward data appears in
 any response it can trigger; still under the byte budget in CI.
 
-## [ ] Phase 7 — distribution
+## [x] Phase 7 — distribution
 Release workflow (binary + checksums + ghcr multi-arch image), install.sh
 (print-don't-edit for compose / proxy configs; no strfry.conf involvement
 at all now), uninstall.sh, README with screenshot, the docker.sock

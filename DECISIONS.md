@@ -272,6 +272,49 @@ notes its revert path; none should be rebuilt without an explicit new call.
   the eviction grace window shown in the Evicted section. Less code than
   a second public endpoint just to carry one integer.
 
+- **The published image's base is `docker:cli`, not `scratch`/`alpine`.**
+  steward doesn't talk to a Docker SDK — raid.go and stats.go shell out to
+  `docker exec <STRFRY_CONTAINER> strfry ...` as a subprocess — so the
+  `docker.sock` mount CLAUDE.md documents is only useful if a `docker`
+  client binary exists inside the container to speak to it. `docker:cli`
+  ships exactly that client and nothing else (no dockerd), which is less
+  code than installing the CLI onto a generic base image by hand.
+- **`install.sh` downloads and sha256-verifies the release tarball for
+  the host's arch even though the actual deployed artifact is the
+  ghcr.io image**, not that tarball. Two things this buys, cheaply: (1) a
+  concrete proof the resolved release tag actually exists and is intact
+  before any local state changes (volume create, `.env` write); (2) the
+  verified tag becomes the version pinned in the printed compose
+  snippet (`$IMAGE:$VERSION`, never `:latest`), so a fresh install isn't
+  silently exposed to whatever `latest` becomes later. The tarball itself
+  is discarded after the check — it's proof-of-integrity, not a runtime.
+- **The release workflow calls `docker buildx` directly with
+  `tonistiigi/binfmt --install all` for cross-arch QEMU registration**,
+  rather than `docker/setup-qemu-action` + `docker/setup-buildx-action`.
+  Same mechanism (that image is what those actions wrap), one fewer
+  third-party Action to trust for a two-line `docker run`.
+- **`install.sh`/`uninstall.sh` prompt via `/dev/tty`, never stdin.** Both
+  are meant to run as `curl -fsSL ... | bash`, which leaves stdin attached
+  to curl's pipe — reading prompts from stdin would silently consume
+  garbage or hang. Reading from the controlling terminal instead keeps the
+  one-line curl-pipe install honest with itself; a script with no
+  controlling terminal at all (fully non-interactive CI) fails loudly
+  instead of hanging.
+- **Re-running `install.sh` never overwrites an `.env` that already has
+  `OWNER_PUBKEY` set.** "Idempotent, re-runnable" (CLAUDE.md) meant
+  picking a rule for the one field a re-run could clobber: an operator
+  who hand-edited `RAID_CRON` or `PUBLIC_RELAYS` after the first install
+  should be able to re-run the installer (e.g. to re-print the compose
+  snippet after losing it) without those edits vanishing. Deleting `.env`
+  is the explicit way to force full reconfiguration.
+- **`uninstall.sh` removes the locally pulled `ghcr.io/sybenx/castle-steward`
+  image and, on confirmation, `.env`; it never touches the `castle-state`
+  volume.** The volume holds `ledger.jsonl` — per CLAUDE.md, the only
+  durable source of truth for the invite tree and elevations, since Nostr
+  events themselves age off relays. An uninstaller that deletes the one
+  irreplaceable piece of state by default would violate the load-bearing
+  premise the whole ledger design rests on.
+
 ## Accepted trade-offs (known, intentional)
 
 - **docker.sock mount is root-equivalent** on the host from an
