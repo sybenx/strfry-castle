@@ -134,7 +134,11 @@ disclosure, and the free-writePolicy-slot note for spam plugins. Test
 install.sh against a clean container running a stock strfry compose stack.
 **Accept:** following install.sh's printed instructions on a fresh box
 yields a working castle with manual dry-run raids; uninstall leaves the
-stock setup intact.
+stock setup intact. Tagged v0.4.0: release workflow verified live (binaries
++ checksums attached to the GitHub Release, multi-arch manifest confirmed
+on ghcr.io), and the published image smoke-tested against a scratch strfry
+container — `docker exec` from inside the image worked, stats.json's
+`version.running` matched the tag.
 
 ## Standing orders
 - After any change to elevation logic, re-run the elevation privacy tests.
