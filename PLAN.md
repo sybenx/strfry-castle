@@ -102,7 +102,7 @@ invite, remove, ennoble, elevate, lower, and trigger a dry-run raid
 end-to-end against the compose stack; /api/wards refuses a non-Lord
 signature.
 
-## [ ] Phase 6a — towncrier: the public page
+## [x] Phase 6a — towncrier: the public page
 One index.html, < 60KB (bytecheck wired into CI this phase), no deps, no
 build. Public sections per CLAUDE.md: Lord, Court (nested <details> with
 stars), Favored, Citizenry, Evicted (struck-through + expiry, "until the

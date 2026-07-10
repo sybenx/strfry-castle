@@ -33,6 +33,5 @@ jobs:
             exit 1
           fi
 
-      # bytecheck is not wired in yet on purpose — towncrier/index.html is
-      # a Phase 0 placeholder and real content lands in Phase 6a, which is
-      # when this gate turns on (see DECISIONS.md).
+      - name: make bytecheck
+        run: make bytecheck

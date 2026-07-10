@@ -2,14 +2,358 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Castle</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --border:#2a2f3a;
+  --text:#dfe3ea; --dim:#8891a0; --gold:#d8b45c; --gold-dim:#8a763f;
+  --red:#c0564f; --link:#9db4d0;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+  font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Georgia,serif;
+  overflow-x:hidden;
+}
+body{max-width:100%;}
+a{color:var(--link)}
+a:hover{color:var(--gold)}
+h1,h2,h3{font-family:Georgia,'Times New Roman',serif;font-weight:600;letter-spacing:.02em}
+header.crown{display:flex;align-items:center;gap:14px;padding:28px 20px 10px;max-width:760px;margin:0 auto}
+header.crown svg{flex:none}
+header.crown h1{margin:0;font-size:1.6em;color:var(--gold)}
+header.crown p{margin:2px 0 0;color:var(--dim);font-size:.85em}
+main{max-width:760px;margin:0 auto;padding:0 20px 60px}
+section{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+  padding:16px 18px;margin:14px 0}
+section h2{margin:0 0 10px;font-size:1.05em;color:var(--gold);border-bottom:1px solid var(--border);
+  padding-bottom:8px}
+.row{display:flex;align-items:center;gap:10px;padding:6px 0}
+.row img.avatar{width:28px;height:28px;border-radius:50%;background:var(--panel2);flex:none;object-fit:cover}
+.row .avatar-fallback{width:28px;height:28px;border-radius:50%;background:var(--panel2);flex:none;
+  display:flex;align-items:center;justify-content:center;font-size:.75em;color:var(--dim)}
+.row .name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .meta{color:var(--dim);font-size:.82em}
+.star{color:var(--gold);margin-left:4px}
+.struck{text-decoration:line-through;color:var(--dim)}
+details{margin:2px 0}
+details > summary{cursor:pointer;list-style:revert;padding:2px 0}
+details > summary::marker{color:var(--dim)}
+details .children{margin-left:22px;border-left:1px solid var(--border);padding-left:12px;margin-top:4px}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+.stat{background:var(--panel2);border-radius:8px;padding:10px 12px}
+.stat .n{font-size:1.4em;font-weight:600;color:var(--gold)}
+.stat .l{color:var(--dim);font-size:.78em;text-transform:uppercase;letter-spacing:.05em}
+.empty{color:var(--dim);font-style:italic;font-size:.9em}
+.note{color:var(--dim);font-size:.85em;margin-top:8px}
+footer{max-width:760px;margin:0 auto;padding:10px 20px 40px;color:var(--dim);font-size:.82em}
+footer .relay-url{cursor:pointer;color:var(--link);border-bottom:1px dotted var(--dim)}
+footer .nip11{margin-top:6px}
+button.enter{background:var(--gold-dim);color:#100e08;border:none;border-radius:6px;
+  padding:8px 16px;font-size:.9em;cursor:pointer;font-weight:600}
+button.enter:hover{background:var(--gold)}
+.enter-wrap{text-align:center;margin:20px 0}
+#nip07-help{display:none;font-size:.85em;color:var(--dim);max-width:500px;margin:10px auto 0;text-align:left}
+#nip07-help a{display:inline}
+.err{color:var(--red)}
+</style>
 </head>
 <body>
-<!--
-  Placeholder for Phase 0. The real page (public status board + NIP-07
-  sign-in, single-file, no build, no dependencies, < 60KB) lands in Phases
-  6a/6b. See CLAUDE.md, Component 3.
--->
-<p>The Castle is under construction.</p>
+
+<header class="crown">
+<svg width="46" height="46" viewBox="0 0 64 64" aria-hidden="true">
+  <g fill="none" stroke="#d8b45c" stroke-width="2.5" stroke-linejoin="round">
+    <path d="M8 54 V28 L16 22 V28 L24 20 V28 L32 18 V28 L40 20 V28 L48 22 V28 L56 54 Z"/>
+    <path d="M8 54 H56"/>
+    <rect x="27" y="38" width="10" height="16" fill="#0f1115"/>
+  </g>
+</svg>
+<div>
+  <h1>The Castle</h1>
+  <p id="tagline">a permanent home for those the Lord trusts</p>
+</div>
+</header>
+
+<main>
+
+<section id="sec-lord">
+  <h2>The Lord</h2>
+  <div id="lord-row" class="row"><span class="empty">loading&hellip;</span></div>
+</section>
+
+<section id="sec-court">
+  <h2>The Court</h2>
+  <div id="court-tree"><span class="empty">loading&hellip;</span></div>
+</section>
+
+<section id="sec-favored">
+  <h2>Favored of the Lord</h2>
+  <div id="favored-list"><span class="empty">loading&hellip;</span></div>
+</section>
+
+<section id="sec-citizenry">
+  <h2>The Citizenry</h2>
+  <div class="stats-grid" id="citizenry-stats"><span class="empty">loading&hellip;</span></div>
+</section>
+
+<section id="sec-evicted">
+  <h2>The Evicted</h2>
+  <div id="evicted-list"><span class="empty">loading&hellip;</span></div>
+</section>
+
+<section id="sec-outerlands">
+  <h2>The Outer Lands</h2>
+  <div class="stats-grid" id="outerlands-stats"><span class="empty">loading&hellip;</span></div>
+  <p class="note">The Outer Lands are open to all. Events here survive until the next raid, at which point strangers' notes older than the standing limit are swept away — the invited, the followed, and the favored are never touched.</p>
+</section>
+
+<section id="sec-dms">
+  <p class="note" style="margin-top:0">
+    <strong>A note on private messages:</strong> gift-wrapped DMs (NIP-59) are
+    signed by random one-time keys, so this relay cannot tell the Lord's own
+    messages from a stranger's. All gift wraps age out at the next raid like
+    any other Outer Lands event. For permanent, private message storage, use
+    a dedicated relay built for that purpose.
+  </p>
+</section>
+
+<div class="enter-wrap">
+  <button class="enter" id="enter-btn">Enter the castle</button>
+  <div id="nip07-help">
+    <p>No Nostr signer extension was found. Signing in requires a NIP-07
+    browser extension so you can prove your identity without ever handing
+    the castle your keys. Common ones:</p>
+    <ul>
+      <li><a href="https://getalby.com/" target="_blank" rel="noopener">Alby</a></li>
+      <li><a href="https://github.com/fiatjaf/nos2x" target="_blank" rel="noopener">nos2x</a></li>
+      <li><a href="https://www.nostrconnect.com/" target="_blank" rel="noopener">Nostr Connect</a> (mobile signers like Amber)</li>
+    </ul>
+  </div>
+</div>
+
+</main>
+
+<footer>
+  <div>Relay: <span class="relay-url" id="relay-url" title="click to copy">&hellip;</span></div>
+  <div class="nip11" id="nip11-info"></div>
+  <div style="margin-top:10px"><a href="https://github.com/sybenx/castle-for-strfry-experiment" target="_blank" rel="noopener">source on GitHub</a></div>
+</footer>
+
+<script>
+'use strict';
+
+function esc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+function short(pk){
+  return pk ? pk.slice(0,8) + '…' + pk.slice(-4) : '';
+}
+
+function njumpURL(pk){
+  return 'https://njump.me/' + pk;
+}
+
+function avatarHTML(picture, alt){
+  if (picture) {
+    return '<img class="avatar" src="' + esc(picture) + '" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement(\'span\'),{className:\'avatar-fallback\',textContent:\'?\'}))">';
+  }
+  return '<span class="avatar-fallback">?</span>';
+}
+
+function memberRow(pk, name, picture, extraClass, starred){
+  const label = esc(name) || short(pk);
+  return '<div class="row' + (extraClass ? ' ' + extraClass : '') + '">' +
+    avatarHTML(picture) +
+    '<a class="name" href="' + njumpURL(pk) + '" target="_blank" rel="noopener">' + label + '</a>' +
+    (starred ? '<span class="star" title="a favorite of the Lord">★</span>' : '') +
+    '</div>';
+}
+
+function fmtAge(unixSeconds){
+  if (!unixSeconds) return 'unknown';
+  const days = Math.floor((Date.now()/1000 - unixSeconds) / 86400);
+  if (days <= 0) return 'today';
+  if (days === 1) return '1 day';
+  return days + ' days';
+}
+
+function fmtExpiry(unixSeconds, raidsAreManual){
+  if (raidsAreManual) return 'until the next raid';
+  const days = Math.ceil((unixSeconds - Date.now()/1000) / 86400);
+  if (days <= 0) return 'any moment now';
+  if (days === 1) return 'in 1 day';
+  return 'in ' + days + ' days';
+}
+
+async function fetchJSON(path){
+  const res = await fetch(path, {headers: {Accept: 'application/json'}});
+  if (!res.ok) throw new Error(path + ': ' + res.status);
+  return res.json();
+}
+
+function renderTree(data){
+  // Lord
+  document.getElementById('lord-row').innerHTML =
+    '<a class="name" href="' + njumpURL(data.owner) + '" target="_blank" rel="noopener">' +
+    esc(short(data.owner)) + '</a>';
+
+  // Build children index for nested <details>.
+  const byInviter = {};
+  for (const m of data.members) {
+    (byInviter[m.invited_by] = byInviter[m.invited_by] || []).push(m);
+  }
+  const byPubkey = {};
+  for (const m of data.members) byPubkey[m.pubkey] = m;
+
+  function renderNode(m){
+    const label = esc(m.label ? m.label + ' — ' : '') +
+      (esc(m.name) || short(m.pubkey));
+    const kids = byInviter[m.pubkey] || [];
+    const star = m.favorite ? '<span class="star" title="a favorite of the Lord">★</span>' : '';
+    let html = '<details open><summary>' + avatarHTML(m.picture) +
+      '<a href="' + njumpURL(m.pubkey) + '" target="_blank" rel="noopener" style="margin-left:6px">' +
+      label + '</a>' + star + '</summary>';
+    if (kids.length) {
+      html += '<div class="children">' + kids.map(renderNode).join('') + '</div>';
+    }
+    html += '</details>';
+    return html;
+  }
+
+  const roots = byInviter[data.owner] || [];
+  const courtEl = document.getElementById('court-tree');
+  courtEl.innerHTML = roots.length
+    ? roots.map(renderNode).join('')
+    : '<span class="empty">the Lord has invited no one yet</span>';
+
+  // Favored (non-tree-member favorites)
+  const favoredEl = document.getElementById('favored-list');
+  favoredEl.innerHTML = data.favored.length
+    ? data.favored.map(f => memberRow(f.pubkey, f.name, f.picture)).join('')
+    : '<span class="empty">none yet</span>';
+
+  return {byPubkey};
+}
+
+function renderEvicted(evicted, raidsAreManual){
+  const el = document.getElementById('evicted-list');
+  el.innerHTML = evicted.length
+    ? evicted.map(e => memberRow(e.pubkey, e.name, null, 'struck') +
+        '<div class="meta" style="margin:-6px 0 8px 38px">expires ' +
+        esc(fmtExpiry(e.expires, raidsAreManual)) + '</div>').join('')
+    : '<span class="empty">no one currently in their grace window</span>';
+}
+
+function renderStats(stats){
+  const raidsAreManual = stats.raids.next == null;
+
+  document.getElementById('citizenry-stats').innerHTML = [
+    ['Tree', stats.citizens.tree],
+    ['Follows', stats.citizens.follows],
+    ['Favored', stats.citizens.favored],
+    ['Events stored', stats.citizens.events],
+  ].map(([l,n]) => '<div class="stat"><div class="n">' + esc(n) + '</div><div class="l">' + esc(l) + '</div></div>').join('');
+
+  const nextRaid = raidsAreManual
+    ? 'at the Lord’s pleasure'
+    : new Date(stats.raids.next * 1000).toLocaleString();
+  const lastRaid = stats.raids.last_at
+    ? fmtAge(stats.raids.last_at) + ' ago (' + (stats.raids.last_purged || 0) + ' purged)'
+    : 'never';
+
+  document.getElementById('outerlands-stats').innerHTML = [
+    ['Events', stats.outer_lands.events],
+    ['Oldest event', fmtAge(stats.outer_lands.oldest)],
+    ['Next raid', nextRaid],
+    ['Last raid', lastRaid],
+  ].map(([l,n]) => '<div class="stat"><div class="n">' + esc(n) + '</div><div class="l">' + esc(l) + '</div></div>').join('');
+
+  if (stats.version && stats.version.latest && stats.version.latest !== stats.version.running) {
+    const tag = document.createElement('p');
+    tag.className = 'note';
+    tag.innerHTML = 'A newer version is available: <strong>' + esc(stats.version.latest) +
+      '</strong> (running ' + esc(stats.version.running) + '). Update with the command in your README.';
+    document.getElementById('sec-outerlands').appendChild(tag);
+  }
+
+  return raidsAreManual;
+}
+
+async function boot(){
+  try {
+    const [stats, tree] = await Promise.all([
+      fetchJSON('/api/stats'),
+      fetchJSON('/api/tree'),
+    ]);
+    const raidsAreManual = renderStats(stats);
+    renderTree(tree);
+    renderEvicted(tree.evicted, raidsAreManual);
+    document.getElementById('lord-row').innerHTML =
+      avatarHTML(null) +
+      '<a class="name" href="' + njumpURL(stats.the_lord.pubkey) + '" target="_blank" rel="noopener">' +
+      esc(short(stats.the_lord.pubkey)) + '</a>' +
+      '<span class="meta">' + esc(stats.the_lord.events) + ' events</span>';
+  } catch (e) {
+    console.error(e);
+    document.querySelectorAll('.empty').forEach(el => {
+      el.textContent = 'could not load';
+      el.classList.add('err');
+    });
+  }
+}
+
+function relayWSURL(){
+  return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+}
+
+async function renderFooter(){
+  const url = relayWSURL();
+  const el = document.getElementById('relay-url');
+  el.textContent = url;
+  el.addEventListener('click', () => {
+    navigator.clipboard.writeText(url).then(() => {
+      const old = el.textContent;
+      el.textContent = 'copied!';
+      setTimeout(() => { el.textContent = old; }, 1200);
+    });
+  });
+
+  try {
+    // no-store: this is the same URL the page itself was just loaded from,
+    // and without it a browser can serve the cached HTML document instead
+    // of hitting the relay for real NIP-11 JSON (no Vary header to tell
+    // them apart).
+    const res = await fetch(location.origin, {headers: {Accept: 'application/nostr+json'}, cache: 'no-store'});
+    if (res.ok) {
+      const info = await res.json();
+      const bits = [];
+      if (info.name) bits.push('<strong>' + esc(info.name) + '</strong>');
+      if (info.description) bits.push(esc(info.description));
+      if (info.software) bits.push(esc(info.software) + (info.version ? ' ' + esc(info.version) : ''));
+      document.getElementById('nip11-info').innerHTML = bits.join(' &middot; ');
+    }
+  } catch (e) {
+    // NIP-11 info is a nicety; silently skip if unreachable.
+  }
+}
+
+document.getElementById('enter-btn').addEventListener('click', () => {
+  if (window.nostr) {
+    // Phase 6b wires up the full signed-in experience (NIP-07 sign-in,
+    // invites, elevation controls, raid control, wards). This build is
+    // read-only.
+    alert('Sign-in and admin controls are coming soon.');
+  } else {
+    document.getElementById('nip07-help').style.display = 'block';
+  }
+});
+
+boot();
+renderFooter();
+</script>
+
 </body>
 </html>
