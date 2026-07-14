@@ -80,6 +80,11 @@ proxy — see [Reverse proxy setup](#reverse-proxy-setup) below.
 
 ## Reverse proxy setup
 
+**The model in one line:** same-origin (one hostname, split by header) is
+the default wherever your proxy can route on headers; `RELAY_URL`
+(split-domain, two hostnames) is for wherever it can't — see
+[Split-domain deployment](#split-domain-deployment) below.
+
 Before castle, your reverse proxy almost certainly sent every request for
 the relay's domain straight to `strfry:7777` — there was nothing else to
 route to. Adding castle means splitting that one route into two:
@@ -124,6 +129,50 @@ you edit by hand, `install.sh` deliberately doesn't touch it for you —
 you'll need that platform's own way of adding a second backend on the
 same domain. Auto-patching an unknown managed config is exactly the kind
 of thing that bricks a relay (see `DECISIONS.md`).
+
+Running raw Traefik and can drop into its dynamic file provider directly?
+`deploy/traefik-pangolin.yml` has the same same-hostname split expressed as
+Traefik routers with priority (same idea as nginx's `break` / Caddy's
+top-to-bottom `handle` ordering above).
+
+## Split-domain deployment
+
+Some reverse proxies can only route by **hostname**, not by header —
+Pangolin's UI, Cloudflare Tunnel, Umbrel, and most hosting panels fall into
+this bucket. They have no way to say "WebSocket upgrades and
+`Accept: application/nostr+json` go to strfry, everything else on this
+same hostname goes to steward" — the header split above is unavailable to
+them entirely.
+
+For these, give strfry and steward **separate hostnames** instead of
+sharing one, and tell steward the relay's real address so towncrier can
+still find it:
+
+1. Point a second hostname at steward — e.g. `castle.example.com` →
+   `steward:8787` — the same way you already point your relay's hostname
+   at `strfry:7777`. No header logic needed; it's a plain one-to-one
+   hostname-to-backend mapping, which is exactly what hostname-only
+   proxies are good at.
+2. Set `RELAY_URL` in steward's environment to the relay's own `wss://`
+   address (the hostname strfry is reachable on), e.g.
+   `RELAY_URL=wss://relay.example.com`. towncrier fetches this from
+   `GET /api/config` at load and uses it everywhere it needs the relay's
+   address directly (the displayed relay URL, the NIP-11 fetch); leaving
+   `RELAY_URL` unset is same-origin mode, unchanged from before this
+   existed.
+3. See `deploy/traefik-pangolin.yml` for the concrete Pangolin case,
+   including where the two hostnames go in its UI.
+
+**The inherent limitation:** in split-domain mode, a browser opening the
+*relay's own* URL (`relay.example.com`) gets strfry's stock landing page,
+not towncrier — towncrier only lives at the second hostname. This is
+exactly why same-origin (one hostname, "open the relay URL, see the
+castle") remains the default and the recommended mode whenever your proxy
+can support it; split-domain is the fallback for when it can't. If this
+bothers you, you can point strfry's own landing page at a redirect to
+towncrier's hostname — but that means editing strfry's config, which is
+outside what Castle does for you (see "Nothing modifies strfry itself,"
+above).
 
 ## The docker.sock trade-off
 

@@ -50,6 +50,7 @@ type config struct {
 	MaxInvites      int
 	MaxDepth        int
 	Listen          string
+	RelayURL        string
 }
 
 func loadConfig() (config, error) {
@@ -64,6 +65,7 @@ func loadConfig() (config, error) {
 		MaxInvites:      envInt("MAX_INVITES", 5),
 		MaxDepth:        envInt("MAX_DEPTH", 4),
 		Listen:          envOr("LISTEN", ":8787"),
+		RelayURL:        os.Getenv("RELAY_URL"),
 	}, nil
 }
 
@@ -168,7 +170,7 @@ func main() {
 	defer stop()
 
 	cycle := NewCycle(cfg, relayFetcher{}, &dockerStrfryScanner{Container: cfg.StrfryContainer}, &dockerStrfryCLI{Container: cfg.StrfryContainer}, githubReleaseChecker{})
-	server := NewServer(cycle, towncrierDir)
+	server := NewServer(cycle, towncrierDir, cfg.RelayURL)
 
 	runCycle := func() {
 		if err := cycle.Run(ctx); err != nil {

@@ -36,7 +36,7 @@ func newAPIServer(t *testing.T, ownerPub string, now time.Time) *Server {
 		ReleaseChecker: &fakeReleaseChecker{},
 		Now:            func() time.Time { return now },
 	}
-	return NewServer(cycle, t.TempDir())
+	return NewServer(cycle, t.TempDir(), "")
 }
 
 // buildNip98Event signs a NIP-98 event for method+url. When body is
@@ -273,6 +273,63 @@ func TestAPI_MissingAuthRejected(t *testing.T) {
 	s.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401 with no Authorization header", w.Code)
+	}
+}
+
+// --- /api/config: RELAY_URL's split-domain hook (CLAUDE.md, "Split-domain
+// deployment") ---
+
+func TestAPI_ConfigEmptyByDefault(t *testing.T) {
+	_, ownerPub := genKeypair(t)
+	now := time.Unix(2_000_000, 0)
+	s := newAPIServer(t, ownerPub, now)
+
+	req := httptest.NewRequest("GET", "http://castle.example/api/config", nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["relay_url"] != "" {
+		t.Fatalf("relay_url = %q, want empty when RELAY_URL is unset", body["relay_url"])
+	}
+}
+
+func TestAPI_ConfigReturnsConfiguredRelayURL(t *testing.T) {
+	_, ownerPub := genKeypair(t)
+	now := time.Unix(2_000_000, 0)
+	cycle := &Cycle{
+		StateDir:       t.TempDir(),
+		Owner:          ownerPub,
+		OwnRelay:       "ws://own",
+		MaxInvites:     5,
+		MaxDepth:       4,
+		OuterTTLDays:   30,
+		RunningVersion: "test",
+		Fetcher:        &fakeFetcher{},
+		Scanner:        &fakeScanner{},
+		CLI:            &fakeStrfryCLI{},
+		ReleaseChecker: &fakeReleaseChecker{},
+		Now:            func() time.Time { return now },
+	}
+	s := NewServer(cycle, t.TempDir(), "wss://relay.example.com")
+
+	req := httptest.NewRequest("GET", "http://castle.example/api/config", nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body["relay_url"] != "wss://relay.example.com" {
+		t.Fatalf("relay_url = %q, want wss://relay.example.com", body["relay_url"])
 	}
 }
 

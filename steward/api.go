@@ -55,6 +55,12 @@ type Server struct {
 	Cycle        *Cycle
 	TowncrierDir string
 
+	// RelayURL is RELAY_URL's value, surfaced to towncrier via
+	// GET /api/config. Empty (the default) means same-origin mode: towncrier
+	// derives the relay's address from window.location, unchanged from
+	// before this field existed. See CLAUDE.md, "Split-domain deployment".
+	RelayURL string
+
 	// mu serializes every read-modify-write mutation (ledger read, ledger
 	// append, state-file rewrite) and every raid, so concurrent API
 	// requests can never race on ledger.jsonl or lose an update.
@@ -64,11 +70,13 @@ type Server struct {
 	rate   *rateLimiter
 }
 
-// NewServer builds a Server around an already-configured Cycle.
-func NewServer(cycle *Cycle, towncrierDir string) *Server {
+// NewServer builds a Server around an already-configured Cycle. relayURL is
+// RELAY_URL's value (empty for same-origin mode, the default).
+func NewServer(cycle *Cycle, towncrierDir string, relayURL string) *Server {
 	return &Server{
 		Cycle:        cycle,
 		TowncrierDir: towncrierDir,
+		RelayURL:     relayURL,
 		replay:       newReplayGuard(),
 		rate:         newRateLimiter(rateLimitPerWindow, rateLimitWindow),
 	}
@@ -84,6 +92,7 @@ func NewServer(cycle *Cycle, towncrierDir string) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("GET /api/tree", s.handleTree)
 	mux.HandleFunc("GET /api/wards", s.handleWards)
@@ -462,6 +471,17 @@ func mutationErrorStatus(err error) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+// --- GET /api/config ---
+
+// handleConfig serves towncrier's split-domain hook: RELAY_URL when set, or
+// an empty string in the (default) same-origin mode. Public and unsigned,
+// like /api/stats and /api/tree — it carries no secret, only a deployment
+// knob the static index.html can't read for itself since it has no build
+// step to inject values into.
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"relay_url": s.RelayURL})
 }
 
 // --- GET /api/stats ---

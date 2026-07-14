@@ -1,0 +1,79 @@
+# Printed by install.sh, never applied automatically (see DECISIONS.md).
+# Route WebSocket upgrades and NIP-11 requests to strfry; everything else
+# (towncrier, /api) to steward. Same split as deploy/Caddyfile and
+# deploy/nginx.conf, expressed as a Traefik dynamic (file-provider) config.
+#
+# Where this goes in a Pangolin install: Pangolin runs Traefik under the
+# hood but its UI can only assign a whole domain/subdomain to one backend —
+# it has no way to express "route by header" (WebSocket upgrade vs. plain
+# HTTP, or Accept: application/nostr+json). That's exactly what forces
+# split-domain mode (RELAY_URL) here in the first place: Pangolin can point
+# one hostname at strfry:7777 and a second hostname at steward:8787, but it
+# cannot split ONE hostname between them the way Caddy/nginx do above.
+#
+# If you're running raw Traefik (not behind Pangolin) and it already reads
+# a file provider, this file can plug into that mechanism directly and DOES
+# express the same single-hostname split Caddy/nginx use, via router
+# priority — see below. Drop it wherever your `providers.file.directory` (or
+# `--providers.file.directory`) points, typically
+# /etc/traefik/dynamic/castle.yml, and make sure Traefik's static config has
+# a file provider watching that directory. Restart/reload Traefik afterward.
+#
+# Router priority is what makes the split work: Traefik evaluates routers
+# high-priority-first and stops at the first match, same idea as Caddy's
+# top-to-bottom `handle` blocks or nginx's `break`-terminated `if`s above.
+# `castle-relay` (priority 10) claims WebSocket upgrades and NIP-11 requests
+# for the shared hostname; `castle-web` (priority 1, effectively "anything
+# else on this hostname") catches the rest and sends it to steward.
+
+http:
+  routers:
+    castle-relay:
+      rule: >-
+        Host(`your-relay-domain.example`) &&
+        (Header(`Connection`, `Upgrade`) || Header(`Upgrade`, `websocket`) ||
+         Header(`Accept`, `application/nostr+json`))
+      entryPoints:
+        - websecure
+      service: strfry
+      priority: 10
+      tls: {}
+
+    castle-web:
+      rule: "Host(`your-relay-domain.example`)"
+      entryPoints:
+        - websecure
+      service: steward
+      priority: 1
+      tls: {}
+
+  services:
+    strfry:
+      loadBalancer:
+        servers:
+          - url: "http://strfry:7777"
+    steward:
+      loadBalancer:
+        servers:
+          - url: "http://steward:8787"
+        # Forward the real client IP so steward's per-IP API rate limit
+        # sees actual clients instead of Traefik's address. Traefik sets
+        # X-Forwarded-For by default; passHostHeader keeps the Host header
+        # intact for NIP-98's `u` tag comparison (requestURL() in api.go).
+        passHostHeader: true
+
+# --- Pangolin (hostname-only routing) ---
+#
+# If Pangolin's UI is genuinely your only option — no direct access to
+# Traefik's dynamic file provider — the above split cannot be expressed at
+# all, and this is exactly what RELAY_URL / split-domain mode is for: give
+# strfry and steward SEPARATE hostnames in Pangolin's UI instead of trying
+# to share one.
+#
+#   relay.example.com    -> strfry:7777    (WebSocket + NIP-11, no split needed)
+#   castle.example.com   -> steward:8787   (towncrier + /api)
+#
+# Then set RELAY_URL=wss://relay.example.com in steward's environment so
+# towncrier (served from castle.example.com) knows the relay's real address
+# instead of guessing from its own URL. See README, "Split-domain
+# deployment".

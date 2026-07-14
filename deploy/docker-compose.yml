@@ -45,6 +45,7 @@ services:
       MAX_INVITES: ${MAX_INVITES:-5}
       MAX_DEPTH: ${MAX_DEPTH:-4}
       LISTEN: ${LISTEN:-:8787}
+      RELAY_URL: ${RELAY_URL:-}
     volumes:
       - castle-state:/state
       - /var/run/docker.sock:/var/run/docker.sock

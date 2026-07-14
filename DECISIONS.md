@@ -314,6 +314,36 @@ notes its revert path; none should be rebuilt without an explicit new call.
   events themselves age off relays. An uninstaller that deletes the one
   irreplaceable piece of state by default would violate the load-bearing
   premise the whole ledger design rests on.
+- **Split-domain mode (`RELAY_URL`) delivers the relay's address to
+  towncrier via `GET /api/config`, not by templating it into
+  `index.html`.** towncrier is a pure static file with no build step
+  (CLAUDE.md's design creed); injecting a value at deploy time would mean
+  either a template step (a build step, which the spec rules out) or
+  string-rewriting the shipped file in place (fragile, and it would need
+  its own re-run-safety story on every steward restart/redeploy). One
+  small public JSON endpoint, fetched once at load and falling back to the
+  pre-RELAY_URL window.location derivation on any failure, keeps
+  `index.html` byte-identical across same-origin and split-domain
+  deployments and keeps `make bytecheck` meaningful (it checks the file
+  that ships, not a post-templated one).
+- **Same-origin stays the default; `RELAY_URL` is opt-in, unset =
+  unchanged behavior.** The premise "open the relay's own URL, see the
+  castle" only holds when towncrier is served from that same URL —
+  split-domain mode breaks it structurally (a browser hitting the relay's
+  hostname gets strfry's stock page, not towncrier; see README, "Split-domain
+  deployment"). Existing deploys must not change behavior on upgrade, so
+  the empty-`RELAY_URL` path is exactly the code that ran before this
+  feature existed, not a special case of a more general one.
+- **Audited NIP-98's `u`-tag validation for the split-domain change; no
+  fix needed.** `requestURL()` (api.go) reconstructs the URL to compare
+  against entirely from the incoming request's own `r.Host` (plus
+  `X-Forwarded-Proto`) and `r.URL.Path` — it never references RELAY_URL or
+  any assumed relay origin. towncrier's `nip98Fetch` signs the `u` tag as
+  `location.origin + path`, i.e. wherever the page itself was loaded from
+  (steward's origin in both modes, since towncrier is only ever served by
+  steward). The two already agree by construction on both same-origin and
+  split-domain deployments; RELAY_URL never entered the auth path in the
+  first place, so there was nothing to change.
 
 ## Accepted trade-offs (known, intentional)
 

@@ -236,6 +236,7 @@ let isMember = false;
 let latestStats = null;
 let latestTree = null;
 let raidPreview = null; // {days, events} from the last successful raid preview
+let relayURL = null; // RELAY_URL from /api/config, or null for same-origin mode
 
 function memberRow(pk, name, picture, extraClass, starred){
   const label = esc(name) || short(pk);
@@ -604,8 +605,31 @@ async function doRaidConfirm(){
   await refreshAll();
 }
 
+// relayWSURL: RELAY_URL when the operator set one (split-domain mode, where
+// towncrier and the relay live on different hostnames and window.location
+// can't tell us the relay's address); otherwise derived from this page's own
+// URL, exactly as before RELAY_URL existed (same-origin mode, the default).
 function relayWSURL(){
+  if (relayURL) return relayURL;
   return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+}
+
+// relayHTTPOrigin turns relayWSURL()'s wss/ws address into the https/http
+// origin NIP-11 is fetched from.
+function relayHTTPOrigin(){
+  return relayWSURL().replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+}
+
+// loadConfig fetches /api/config for RELAY_URL. Any failure (offline, an
+// older steward without the endpoint, bad JSON) just leaves relayURL null,
+// which is exactly same-origin mode — the pre-RELAY_URL behavior.
+async function loadConfig(){
+  try {
+    const cfg = await fetchJSON('/api/config');
+    relayURL = cfg.relay_url || null;
+  } catch (e) {
+    relayURL = null;
+  }
 }
 
 async function renderFooter(){
@@ -621,11 +645,13 @@ async function renderFooter(){
   });
 
   try {
-    // no-store: this is the same URL the page itself was just loaded from,
-    // and without it a browser can serve the cached HTML document instead
-    // of hitting the relay for real NIP-11 JSON (no Vary header to tell
-    // them apart).
-    const res = await fetch(location.origin, {headers: {Accept: 'application/nostr+json'}, cache: 'no-store'});
+    // no-store: in same-origin mode this is the same URL the page itself
+    // was just loaded from, and without it a browser can serve the cached
+    // HTML document instead of hitting the relay for real NIP-11 JSON (no
+    // Vary header to tell them apart). In split-domain mode this is a
+    // cross-origin fetch to the relay's own host; NIP-11 is a nicety, so a
+    // relay with no permissive CORS header just fails silently below.
+    const res = await fetch(relayHTTPOrigin(), {headers: {Accept: 'application/nostr+json'}, cache: 'no-store'});
     if (res.ok) {
       const info = await res.json();
       const bits = [];
@@ -676,7 +702,7 @@ document.addEventListener('click', async (e) => {
 });
 
 refreshAll();
-renderFooter();
+loadConfig().then(renderFooter);
 </script>
 
 </body>

@@ -289,6 +289,17 @@ tree_has_member() {
 
 fail=0
 
+echo "==> smoke: API — /api/config (public, unsigned; RELAY_URL unset here so relay_url must be empty)"
+CONFIG_JSON=$(curl -sf http://localhost:8787/api/config)
+if [ -z "$CONFIG_JSON" ] || ! echo "$CONFIG_JSON" | jq -e 'type == "object"' >/dev/null; then
+	echo "==> smoke: FAIL — /api/config did not return valid JSON: $CONFIG_JSON" >&2
+	fail=1
+fi
+if [ "$(echo "$CONFIG_JSON" | jq -r '.relay_url')" != "" ]; then
+	echo "==> smoke: FAIL — /api/config relay_url should be empty when RELAY_URL is unset: $CONFIG_JSON" >&2
+	fail=1
+fi
+
 echo "==> smoke: API — invite"
 code=$(api_call POST /api/invite "$OWNER_SEC" "{\"pubkey\":\"$MEMBER_PUB\",\"label\":\"smoke-member\"}")
 if [ "$code" != "200" ]; then
