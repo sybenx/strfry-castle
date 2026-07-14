@@ -99,6 +99,13 @@ nak event -k 3 -p "$FOLLOW_PUB" --sec "$OWNER_SEC" -q ws://localhost:7777 >/dev/
 nak event -k 1 -c "the Lord speaks" --sec "$OWNER_SEC" -q ws://localhost:7777 >/dev/null
 nak event -k 1 -c "a follow's note" --sec "$FOLLOW_SEC" -q ws://localhost:7777 >/dev/null
 nak event -k 1 -c "a stranger's note" --sec "$STRANGER_SEC" -q ws://localhost:7777 >/dev/null
+# Encrypted fixtures for the census: a kind-4 from the Lord (public-citizen
+# side of the split), a kind-4 from the stranger, and a kind-1059 gift wrap
+# signed by a fresh one-time key (both on the outer side).
+GIFTWRAP_SEC=$(nak key generate)
+nak event -k 4 -c "aGVsbG8=?iv=YQ==" --sec "$OWNER_SEC" -q ws://localhost:7777 >/dev/null
+nak event -k 4 -c "c3B5Cg==?iv=YQ==" --sec "$STRANGER_SEC" -q ws://localhost:7777 >/dev/null
+nak event -k 1059 -c "wrapped" --sec "$GIFTWRAP_SEC" -q ws://localhost:7777 >/dev/null
 
 # STRFRY_CONTAINER doubles as the websocket hostname (ownRelayURL). Phase 3b's
 # stats generation shells out via `docker exec` to run `strfry scan` inside
@@ -127,6 +134,7 @@ STATE=$(docker run --rm -v "$VOLUME_STATE":/state alpine:3 sh -c \
 	 echo ---tree---; cat /state/tree.json 2>/dev/null || echo "{}"; echo; \
 	 echo ---stats---; cat /state/stats.json 2>/dev/null || echo "{}"; echo; \
 	 echo ---namecache---; cat /state/name-cache.json 2>/dev/null || echo "{}"; echo; \
+	 echo ---census---; cat /state/census.json 2>/dev/null || echo "{}"; echo; \
 	 echo ---ledger---; cat /state/ledger.jsonl 2>/dev/null || true')
 echo "$STATE"
 
@@ -135,7 +143,8 @@ section() {
 }
 CITIZENS_JSON=$(section citizens tree)
 STATS_JSON=$(section stats namecache)
-NAMECACHE_JSON=$(section namecache ledger)
+NAMECACHE_JSON=$(section namecache census)
+CENSUS_JSON=$(section census ledger)
 
 fail=0
 if ! echo "$CITIZENS_JSON" | jq -e --arg pk "$FOLLOW_PUB" '.pubkeys | index($pk)' >/dev/null; then
@@ -185,10 +194,44 @@ if echo "$NAMECACHE_JSON" | jq -e --arg pk "$FOLLOW_PUB" 'has($pk)' >/dev/null; 
 	fail=1
 fi
 
+# The census: event-derived transparency data. Unlike stats.json, author
+# pubkeys (including strangers') are ALLOWED here — everything in it is
+# anonymously queryable from the relay anyway. What must hold: encrypted
+# counts split correctly on the PUBLIC citizen set, and no author entry
+# carries any classification field.
+if ! echo "$CENSUS_JSON" | jq -e 'type == "object"' >/dev/null; then
+	echo "==> smoke: FAIL — census.json did not parse: $CENSUS_JSON" >&2
+	fail=1
+fi
+if [ "$(echo "$CENSUS_JSON" | jq -r '.events')" -lt 6 ]; then
+	echo "==> smoke: FAIL — census.json events should count all 7 fixture events (got $(echo "$CENSUS_JSON" | jq -r '.events'))" >&2
+	fail=1
+fi
+if [ "$(echo "$CENSUS_JSON" | jq -r '.encrypted.public_citizens')" != "1" ]; then
+	echo "==> smoke: FAIL — census encrypted.public_citizens should be 1 (the Lord's kind-4): $CENSUS_JSON" >&2
+	fail=1
+fi
+if [ "$(echo "$CENSUS_JSON" | jq -r '.encrypted.outer')" != "2" ]; then
+	echo "==> smoke: FAIL — census encrypted.outer should be 2 (stranger kind-4 + gift wrap): $CENSUS_JSON" >&2
+	fail=1
+fi
+if ! echo "$CENSUS_JSON" | jq -e --arg pk "$STRANGER_PUB" '.all_authors | map(.pubkey) | index($pk)' >/dev/null; then
+	echo "==> smoke: FAIL — census all_authors should list the stranger (event-derived data is public)" >&2
+	fail=1
+fi
+if ! echo "$CENSUS_JSON" | jq -e '.all_authors | all(keys | sort == ["events","first_seen","last_seen","pubkey"])' >/dev/null; then
+	echo "==> smoke: FAIL — a census author entry carries a field beyond the event-derived four" >&2
+	fail=1
+fi
+if ! echo "$CENSUS_JSON" | jq -e '.kinds | map(.kind) | index(4)' >/dev/null; then
+	echo "==> smoke: FAIL — census kinds should include kind 4" >&2
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "==> smoke: citizens.json, stats.json, and name-cache.json all reflect the real cycle correctly"
+echo "==> smoke: citizens.json, stats.json, name-cache.json, and census.json all reflect the real cycle correctly"
 
 # --- Phase 5: the HTTP API, driven with curl + nak-signed NIP-98 headers ---
 # See PLAN.md's Phase 5 acceptance criterion: "curl + nak-signed headers can
@@ -297,6 +340,13 @@ if [ -z "$CONFIG_JSON" ] || ! echo "$CONFIG_JSON" | jq -e 'type == "object"' >/d
 fi
 if [ "$(echo "$CONFIG_JSON" | jq -r '.relay_url')" != "" ]; then
 	echo "==> smoke: FAIL — /api/config relay_url should be empty when RELAY_URL is unset: $CONFIG_JSON" >&2
+	fail=1
+fi
+
+echo "==> smoke: API — /api/census (public, unsigned)"
+CENSUS_API=$(curl -sf http://localhost:8787/api/census)
+if [ -z "$CENSUS_API" ] || ! echo "$CENSUS_API" | jq -e '.authors >= 4' >/dev/null; then
+	echo "==> smoke: FAIL — unsigned /api/census should serve the census (want authors >= 4): $CENSUS_API" >&2
 	fail=1
 fi
 

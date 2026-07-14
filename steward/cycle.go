@@ -64,6 +64,7 @@ func (c *Cycle) followsPath() string      { return filepath.Join(c.StateDir, "fo
 func (c *Cycle) citizensPath() string     { return filepath.Join(c.StateDir, "citizens.json") }
 func (c *Cycle) treePath() string         { return filepath.Join(c.StateDir, "tree.json") }
 func (c *Cycle) statsPath() string        { return filepath.Join(c.StateDir, "stats.json") }
+func (c *Cycle) censusPath() string       { return filepath.Join(c.StateDir, "census.json") }
 func (c *Cycle) nameCachePath() string    { return filepath.Join(c.StateDir, "name-cache.json") }
 func (c *Cycle) releaseCachePath() string { return filepath.Join(c.StateDir, "release-check.json") }
 

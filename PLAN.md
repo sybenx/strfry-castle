@@ -140,12 +140,65 @@ on ghcr.io), and the published image smoke-tested against a scratch strfry
 container — `docker exec` from inside the image worked, stats.json's
 `version.running` matched the tag.
 
+## [ ] Phase 8 — version-banner correctness (move comparison into steward)
+
+Code review of the working-tree towncrier version-banner change (see
+DECISIONS.md for the finding) found the client-side `versionIsNewer` +
+exact-tag-regex approach misclassifies real, reachable build strings.
+Move the decision server-side per CLAUDE.md's "Version comparison is
+steward's job, not towncrier's":
+
+- In steward (stats.go), parse `c.RunningVersion` and the GitHub tag the
+  same way — tolerate an optional `v`, ignore `git describe`'s
+  `-N-gHASH`/`-dirty` suffix, compare numeric cores — and add a derived
+  signal to `VersionInfo` (e.g. `UpdateAvailable bool`) instead of leaving
+  towncrier to infer direction from raw strings. Cover it with a Go table
+  test: exact match, dirty/describe suffix behind latest, dirty/describe
+  suffix ahead of latest (already-newer local build), `dev`, bare-hash
+  fallback, unprefixed tags on either side, unparseable `latest`
+  (non-semver GitHub tag) — each asserting the correct banner state.
+- towncrier only renders the signal steward computed; delete the
+  client-side `versionIsNewer` helper and the exact-tag regex gate.
+- The banner text must contain the actual one-line update command (the
+  install.sh curl-pipe line from README.md), not just point at the
+  README — CLAUDE.md's update-banner sentence requires the command
+  itself.
+- Once the design is settled, record it in DECISIONS.md (the "preview
+  build, ahead of latest" banner state is a decision not covered by
+  CLAUDE.md's original spec and needs an entry there, per the standing
+  order below).
+
+**Accept:** a Go test suite drives `checkRelease`/version-comparison
+through the cases above and asserts `stats.json`'s update signal is
+correct in each; towncrier has no version-parsing regex left; `make
+bytecheck` still passes.
+
+## [x] Phase 9 — the Census
+Public DB-transparency layer per CLAUDE.md "The Census" and DECISIONS.md
+"The Census re-scope": kind-aware ScanAll (raid's ScanUntil unchanged),
+per-author/per-kind/encrypted aggregation inside the existing cycle scan,
+census.json (derived view, atomic write), public GET /api/census, and
+towncrier's census section (capped top/stale tables, totals, kind +
+encrypted counts, full-JSON download link) plus the live event viewer
+(client-side NIP-01 REQ, raw escaped text, 50-event cap).
+**Accept:** Go tests cover the aggregation (counts, first/last seen, sort
+orders, caps, ephemeral-kind exclusion) and the ward-indistinguishability
+property (encrypted split + stale_outer classify a ward as outer; author
+entries carry only the four event-derived fields — asserted against the
+served payload); /api/census serves unsigned requests and 503s before the
+first cycle; smoke publishes kind-4/kind-1059 fixtures and asserts the
+census counts, the stranger's presence in all_authors, and the
+no-classification-fields invariant; `make bytecheck` passes.
+
 ## Standing orders
 - After any change to elevation logic, re-run the elevation privacy tests.
 - Never let a network failure shrink citizens (ledger + follows.json are
   truth).
 - Wards in public output = release-blocking bug. Grep public projections
-  in tests, not by eye.
+  in tests, not by eye. Census corollary: a ward's PUBKEY appearing as an
+  ordinary author is fine (event-derived, anonymously queryable anyway);
+  any census field computed from the full ward-inclusive citizen set is
+  the same release-blocking bug.
 - Keep towncrier's byte budget: `wc -c` in CI, fail over 60KB.
 - steward state is pubkeys, timestamps, admin actions. Event ids as
   PROVENANCE (the follows-snapshot source) are required; event ids as

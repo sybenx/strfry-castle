@@ -345,6 +345,41 @@ notes its revert path; none should be rebuilt without an explicit new call.
   split-domain deployments; RELAY_URL never entered the auth path in the
   first place, so there was nothing to change.
 
+## The Census re-scope (2026-07-14)
+
+The Lord chose to formally reopen a slice of the rejected surface — a
+public DB-transparency layer ("the census") plus a live per-pubkey event
+viewer — after weighing the ward-privacy analysis. The deciding principle,
+now load-bearing in CLAUDE.md ("The Census"):
+
+- **Public output may show only what anonymous relay queries already
+  reveal.** strfry has no read gating; authors, kinds, counts, and
+  timestamps are all derivable by any client, so publishing them leaks
+  nothing new. Steward-private state (wards above all) never classifies
+  census output — the only split used is the public citizen set, under
+  which a ward looks like any stranger. This deliberately extends the
+  existing "ward privacy is obscurity" trade-off: the census does part of
+  an observer's enumeration work, and that is accepted with eyes open
+  because the observer could always have done it.
+- **The event viewer partially reopens "towncrier as a feed"** — scoped
+  to raw escaped text of one author's stored events via a client-side
+  NIP-01 REQ (no steward involvement, no auth: the relay answers anyone).
+  The original rejection's byte-budget argument didn't survive contact
+  (~4KB of JS); the "becomes a Nostr client" argument still binds at the
+  boundary: no media, no threads, no reactions, no composer, ever.
+- **The census rides the existing cycle scan** — per-author aggregation
+  happens inside the same ScanAll pass that already counts the Outer
+  Lands, written to census.json (derived, regenerable), served by public
+  GET /api/census. Accepted memory shape: ~100 bytes per distinct author
+  during the scan; tens of MB only under a 100k-author spam wave. No cap
+  machinery until that's real.
+- **Still rejected, reaffirmed now:** curated per-user feeds, spam/quality
+  judgment (the raid is the moderation), byte/storage accounting,
+  time-series/history/heatmaps (point-in-time snapshots only), name
+  resolution for census strangers (the kind-0 cache's subject list is
+  unchanged), and any sender attribution for encrypted events (NIP-59
+  one-time keys make it impossible; counts are aggregate only).
+
 ## Accepted trade-offs (known, intentional)
 
 - **docker.sock mount is root-equivalent** on the host from an

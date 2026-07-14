@@ -110,6 +110,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /api/config", s.handleConfig)
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("GET /api/census", s.handleCensus)
 	mux.HandleFunc("GET /api/tree", s.handleTree)
 	mux.HandleFunc("GET /api/wards", s.handleWards)
 	mux.HandleFunc("POST /api/invite", s.handleInvite)
@@ -510,6 +511,27 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusServiceUnavailable, "stats not yet generated")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// --- GET /api/census ---
+
+// handleCensus serves census.json — public, like /api/stats. The census
+// contains only what an anonymous relay query could discover (authors,
+// kinds, counts, timestamps; see stats.go's census rule), so it needs no
+// auth: nothing in it is computed from steward's private state.
+func (s *Server) handleCensus(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(s.Cycle.censusPath())
+	if err != nil {
+		if !s.firstCycleDone.Load() {
+			writeError(w, http.StatusServiceUnavailable, "steward is completing its first sync, try again shortly")
+			return
+		}
+		writeError(w, http.StatusServiceUnavailable, "census not yet generated")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

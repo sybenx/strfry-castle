@@ -671,6 +671,41 @@ func TestHandleStats_ServesStatsOnceWritten(t *testing.T) {
 	}
 }
 
+// --- GET /api/census: public, no auth, same degrade behavior as stats ---
+
+func TestHandleCensus_PublicAndUnauthenticated(t *testing.T) {
+	_, ownerPub := genKeypair(t)
+	now := time.Unix(2_000_000, 0)
+	s := newAPIServer(t, ownerPub, now)
+
+	// Before census.json exists: 503, like stats.
+	req := httptest.NewRequest("GET", "http://castle.example/api/census", nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 before census.json exists", w.Code)
+	}
+
+	if err := writeJSONAtomic(s.Cycle.censusPath(), Census{Events: 3, Authors: 2}); err != nil {
+		t.Fatalf("write census.json: %v", err)
+	}
+
+	// No Authorization header at all: the census is public by design.
+	req = httptest.NewRequest("GET", "http://castle.example/api/census", nil)
+	w = httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for an anonymous census request, body: %s", w.Code, w.Body)
+	}
+	var census Census
+	if err := json.Unmarshal(w.Body.Bytes(), &census); err != nil {
+		t.Fatalf("decode census: %v", err)
+	}
+	if census.Events != 3 || census.Authors != 2 {
+		t.Fatalf("census = %+v, want events=3 authors=2", census)
+	}
+}
+
 func TestAPI_UnknownAPIPathIs404NotStaticFallback(t *testing.T) {
 	_, ownerPub := genKeypair(t)
 	now := time.Unix(2_000_000, 0)

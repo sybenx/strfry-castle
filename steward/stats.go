@@ -35,9 +35,11 @@ type strfryScanner interface {
 	// filter, e.g. {"authors": [...]}).
 	Count(ctx context.Context, filter map[string]any) (int, error)
 
-	// ScanAll streams every stored event's author and timestamp to fn, one
-	// at a time ("stream, don't slurp" — CLAUDE.md's raid pseudocode).
-	ScanAll(ctx context.Context, fn func(pubkey string, createdAt int64)) error
+	// ScanAll streams every stored event's author, kind, and timestamp to
+	// fn, one at a time ("stream, don't slurp" — CLAUDE.md's raid
+	// pseudocode). Kind is carried so stats can skip ephemeral kinds and
+	// count encrypted ones; the raid path (ScanUntil) has no use for it.
+	ScanAll(ctx context.Context, fn func(pubkey string, kind int, createdAt int64)) error
 
 	// ScanUntil streams every stored event with created_at <= until (NIP-01
 	// "until" semantics) to fn. This is the raid's scan: CLAUDE.md's
@@ -97,15 +99,17 @@ func (d *dockerStrfryScanner) Count(ctx context.Context, filter map[string]any) 
 	return count, nil
 }
 
-func (d *dockerStrfryScanner) ScanAll(ctx context.Context, fn func(pubkey string, createdAt int64)) error {
+func (d *dockerStrfryScanner) ScanAll(ctx context.Context, fn func(pubkey string, kind int, createdAt int64)) error {
 	return d.scan(ctx, map[string]any{}, fn)
 }
 
 func (d *dockerStrfryScanner) ScanUntil(ctx context.Context, until int64, fn func(pubkey string, createdAt int64)) error {
-	return d.scan(ctx, map[string]any{"until": until}, fn)
+	return d.scan(ctx, map[string]any{"until": until}, func(pubkey string, _ int, createdAt int64) {
+		fn(pubkey, createdAt)
+	})
 }
 
-func (d *dockerStrfryScanner) scan(ctx context.Context, filter map[string]any, fn func(pubkey string, createdAt int64)) error {
+func (d *dockerStrfryScanner) scan(ctx context.Context, filter map[string]any, fn func(pubkey string, kind int, createdAt int64)) error {
 	data, err := json.Marshal(filter)
 	if err != nil {
 		return err
@@ -127,12 +131,13 @@ func (d *dockerStrfryScanner) scan(ctx context.Context, filter map[string]any, f
 		}
 		var ev struct {
 			Pubkey    string `json:"pubkey"`
+			Kind      int    `json:"kind"`
 			CreatedAt int64  `json:"created_at"`
 		}
 		if err := json.Unmarshal(line, &ev); err != nil {
 			continue // a malformed line shouldn't sink the whole scan
 		}
-		fn(ev.Pubkey, ev.CreatedAt)
+		fn(ev.Pubkey, ev.Kind, ev.CreatedAt)
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -293,19 +298,34 @@ func (c *Cycle) generateStats(ctx context.Context, state *State, follows Follows
 	for _, pk := range state.Citizens(follows.Pubkeys) {
 		allCitizens[pk] = true
 	}
+	// publicSet classifies census output. It is publicCitizenPubkeys ∪ the
+	// Lord — NEVER the full citizen set above, which contains wards: a
+	// public split computed from it would mark wards as citizens and leak
+	// their status. Under publicSet a ward classifies as an ordinary Outer
+	// Lands author, which is exactly what an anonymous relay query shows.
+	publicSet := make(map[string]bool, len(publicCitizens)+1)
+	for _, pk := range publicCitizens {
+		publicSet[pk] = true
+	}
+	publicSet[state.Owner] = true
+
 	outerEvents := 0
 	var outerOldest int64
-	err = c.Scanner.ScanAll(ctx, func(pubkey string, createdAt int64) {
-		if allCitizens[pubkey] {
-			return
+	census := newCensusBuilder(publicSet)
+	err = c.Scanner.ScanAll(ctx, func(pubkey string, kind int, createdAt int64) {
+		if !allCitizens[pubkey] {
+			outerEvents++
+			if outerOldest == 0 || createdAt < outerOldest {
+				outerOldest = createdAt
+			}
 		}
-		outerEvents++
-		if outerOldest == 0 || createdAt < outerOldest {
-			outerOldest = createdAt
-		}
+		census.observe(pubkey, kind, createdAt)
 	})
 	if err != nil {
 		return fmt.Errorf("stats: scan the Outer Lands: %w", err)
+	}
+	if err := writeJSONAtomic(c.censusPath(), census.build(now)); err != nil {
+		return fmt.Errorf("stats: write census.json: %w", err)
 	}
 
 	evicted := evictedInGrace(state, follows.Pubkeys, now, c.OuterTTLDays)
@@ -360,6 +380,162 @@ func (c *Cycle) generateStats(ctx context.Context, state *State, follows Follows
 		return fmt.Errorf("stats: refresh name cache: %w", err)
 	}
 	return nil
+}
+
+// --- census.json ---
+
+// The census is towncrier's public DB-transparency view. Governing rule
+// (CLAUDE.md, "The Census"): it may contain only what an anonymous client
+// could discover by querying the relay directly — authors, kinds, counts,
+// timestamps. Nothing in it is ever computed from steward's private state;
+// its only classification set is the PUBLIC citizen components, so a ward
+// appears exactly as any stranger would. Ephemeral kinds (20000–29999) are
+// excluded, per CLAUDE.md's "ignore them in stats".
+
+// censusCap bounds the pre-sorted convenience views (top authors, stale
+// outer authors). The full author list ships in all_authors regardless.
+const censusCap = 100
+
+// encryptedKinds: NIP-04 DMs (4) and NIP-59 gift wraps (1059). Counted in
+// aggregate only — gift wraps are signed by random one-time keys, so no
+// per-sender attribution is possible even in principle.
+func isEncryptedKind(kind int) bool { return kind == 4 || kind == 1059 }
+
+func isEphemeralKind(kind int) bool { return kind >= 20000 && kind < 30000 }
+
+type Census struct {
+	UpdatedAt  int64          `json:"updated_at"`
+	Events     int            `json:"events"`
+	Authors    int            `json:"authors"`
+	Kinds      []KindCount    `json:"kinds"`
+	TopAuthors []CensusEntry  `json:"top_authors"`
+	StaleOuter []CensusEntry  `json:"stale_outer"`
+	Encrypted  EncryptedStats `json:"encrypted"`
+	AllAuthors []CensusEntry  `json:"all_authors"`
+}
+
+type KindCount struct {
+	Kind   int `json:"kind"`
+	Events int `json:"events"`
+}
+
+type CensusEntry struct {
+	Pubkey    string `json:"pubkey"`
+	Events    int    `json:"events"`
+	FirstSeen int64  `json:"first_seen"`
+	LastSeen  int64  `json:"last_seen"`
+}
+
+// EncryptedStats splits encrypted-event counts by the PUBLIC citizen set
+// only (tree ∪ follows ∪ favorites ∪ the Lord) — see the census rule above.
+type EncryptedStats struct {
+	PublicCitizens int `json:"public_citizens"`
+	Outer          int `json:"outer"`
+}
+
+type censusAuthor struct {
+	count     int
+	firstSeen int64
+	lastSeen  int64
+}
+
+type censusBuilder struct {
+	publicSet map[string]bool
+	authors   map[string]*censusAuthor
+	kinds     map[int]int
+	events    int
+	encrypted EncryptedStats
+}
+
+func newCensusBuilder(publicSet map[string]bool) *censusBuilder {
+	return &censusBuilder{
+		publicSet: publicSet,
+		authors:   make(map[string]*censusAuthor),
+		kinds:     make(map[int]int),
+	}
+}
+
+func (b *censusBuilder) observe(pubkey string, kind int, createdAt int64) {
+	if isEphemeralKind(kind) {
+		return
+	}
+	b.events++
+	b.kinds[kind]++
+	a := b.authors[pubkey]
+	if a == nil {
+		a = &censusAuthor{firstSeen: createdAt, lastSeen: createdAt}
+		b.authors[pubkey] = a
+	}
+	a.count++
+	if createdAt < a.firstSeen {
+		a.firstSeen = createdAt
+	}
+	if createdAt > a.lastSeen {
+		a.lastSeen = createdAt
+	}
+	if isEncryptedKind(kind) {
+		if b.publicSet[pubkey] {
+			b.encrypted.PublicCitizens++
+		} else {
+			b.encrypted.Outer++
+		}
+	}
+}
+
+func (b *censusBuilder) build(now int64) Census {
+	all := make([]CensusEntry, 0, len(b.authors))
+	for pk, a := range b.authors {
+		all = append(all, CensusEntry{Pubkey: pk, Events: a.count, FirstSeen: a.firstSeen, LastSeen: a.lastSeen})
+	}
+	// count desc, pubkey asc for determinism
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Events != all[j].Events {
+			return all[i].Events > all[j].Events
+		}
+		return all[i].Pubkey < all[j].Pubkey
+	})
+
+	stale := make([]CensusEntry, 0)
+	for _, e := range all {
+		if !b.publicSet[e.Pubkey] {
+			stale = append(stale, e)
+		}
+	}
+	// least-recently-active first: these are the authors a raid ages out
+	sort.Slice(stale, func(i, j int) bool {
+		if stale[i].LastSeen != stale[j].LastSeen {
+			return stale[i].LastSeen < stale[j].LastSeen
+		}
+		return stale[i].Pubkey < stale[j].Pubkey
+	})
+
+	kinds := make([]KindCount, 0, len(b.kinds))
+	for k, n := range b.kinds {
+		kinds = append(kinds, KindCount{Kind: k, Events: n})
+	}
+	sort.Slice(kinds, func(i, j int) bool {
+		if kinds[i].Events != kinds[j].Events {
+			return kinds[i].Events > kinds[j].Events
+		}
+		return kinds[i].Kind < kinds[j].Kind
+	})
+
+	capN := func(s []CensusEntry) []CensusEntry {
+		if len(s) > censusCap {
+			return s[:censusCap]
+		}
+		return s
+	}
+	return Census{
+		UpdatedAt:  now,
+		Events:     b.events,
+		Authors:    len(all),
+		Kinds:      kinds,
+		TopAuthors: capN(all),
+		StaleOuter: capN(stale),
+		Encrypted:  b.encrypted,
+		AllAuthors: all,
+	}
 }
 
 // --- kind-0 name cache ---

@@ -66,6 +66,7 @@ type fakeScanner struct {
 
 type fakeStoredEvent struct {
 	Pubkey    string
+	Kind      int
 	CreatedAt int64
 }
 
@@ -87,9 +88,9 @@ func (f *fakeScanner) Count(ctx context.Context, filter map[string]any) (int, er
 	return n, nil
 }
 
-func (f *fakeScanner) ScanAll(ctx context.Context, fn func(pubkey string, createdAt int64)) error {
+func (f *fakeScanner) ScanAll(ctx context.Context, fn func(pubkey string, kind int, createdAt int64)) error {
 	for _, e := range f.events {
-		fn(e.Pubkey, e.CreatedAt)
+		fn(e.Pubkey, e.Kind, e.CreatedAt)
 	}
 	return nil
 }

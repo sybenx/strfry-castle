@@ -290,6 +290,126 @@ func TestNameCache_StalenessAndPruning(t *testing.T) {
 	}
 }
 
+// --- the census ---
+
+func readCensus(t *testing.T, c *Cycle) Census {
+	t.Helper()
+	var census Census
+	if err := json.Unmarshal([]byte(readRaw(t, c.censusPath())), &census); err != nil {
+		t.Fatalf("census.json did not parse: %v", err)
+	}
+	return census
+}
+
+func TestCensus_Aggregation(t *testing.T) {
+	c := newTestCycle(t, &fakeFetcher{})
+	c.Scanner = &fakeScanner{events: []fakeStoredEvent{
+		{Pubkey: testOwner, Kind: 1, CreatedAt: 100},
+		{Pubkey: testOwner, Kind: 0, CreatedAt: 150},
+		{Pubkey: "m1", Kind: 1, CreatedAt: 200},
+		{Pubkey: "m1", Kind: 1, CreatedAt: 300},
+		{Pubkey: "m1", Kind: 7, CreatedAt: 250},
+		{Pubkey: "stranger1", Kind: 1, CreatedAt: 400},
+		{Pubkey: "stranger2", Kind: 1, CreatedAt: 50},
+		{Pubkey: "stranger2", Kind: 1, CreatedAt: 60},
+		// ephemeral kinds are strfry's business (NIP-16); ignored in stats
+		{Pubkey: "stranger1", Kind: 20001, CreatedAt: 500},
+	}}
+	if err := AppendLedger(c.ledgerPath(), Entry{Verb: VerbInvite, Pubkey: "m1", InvitedBy: testOwner, Timestamp: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, c)
+	census := readCensus(t, c)
+
+	if census.Events != 8 { // 9 stored minus the ephemeral one
+		t.Fatalf("events = %d, want 8 (ephemeral kind excluded)", census.Events)
+	}
+	if census.Authors != 4 {
+		t.Fatalf("authors = %d, want 4", census.Authors)
+	}
+	// kinds: 1 -> 6, 0 -> 1, 7 -> 1; kind 20001 absent
+	if len(census.Kinds) != 3 || census.Kinds[0].Kind != 1 || census.Kinds[0].Events != 6 {
+		t.Fatalf("kinds = %+v, want kind 1 first with 6 events and no ephemeral kind", census.Kinds)
+	}
+	for _, k := range census.Kinds {
+		if isEphemeralKind(k.Kind) {
+			t.Fatalf("ephemeral kind %d leaked into the census", k.Kind)
+		}
+	}
+	// top authors: m1(3) first, then owner(2)/stranger2(2) by pubkey, stranger1(1)
+	if census.TopAuthors[0].Pubkey != "m1" || census.TopAuthors[0].Events != 3 {
+		t.Fatalf("top_authors[0] = %+v, want m1 with 3", census.TopAuthors[0])
+	}
+	if census.TopAuthors[0].FirstSeen != 200 || census.TopAuthors[0].LastSeen != 300 {
+		t.Fatalf("m1 first/last = %d/%d, want 200/300", census.TopAuthors[0].FirstSeen, census.TopAuthors[0].LastSeen)
+	}
+	if len(census.AllAuthors) != 4 {
+		t.Fatalf("all_authors has %d entries, want 4", len(census.AllAuthors))
+	}
+	// stale outer: strangers only (owner and m1 are public citizens),
+	// least-recently-active first: stranger2 (lastSeen 60) then stranger1 (400)
+	if len(census.StaleOuter) != 2 || census.StaleOuter[0].Pubkey != "stranger2" || census.StaleOuter[1].Pubkey != "stranger1" {
+		t.Fatalf("stale_outer = %+v, want [stranger2, stranger1]", census.StaleOuter)
+	}
+}
+
+// TestCensus_WardIndistinguishable is the census's ward-privacy property:
+// a ward's pubkey MAY appear (their events are anonymously queryable from
+// the relay like anyone's), but nothing may classify them differently from
+// a stranger — the encrypted split and stale_outer must both treat a ward
+// as outer, because they are computed from PUBLIC citizen components only.
+func TestCensus_WardIndistinguishable(t *testing.T) {
+	c := newTestCycle(t, &fakeFetcher{})
+	c.Scanner = &fakeScanner{events: []fakeStoredEvent{
+		{Pubkey: testOwner, Kind: 4, CreatedAt: 100},      // encrypted, public citizen
+		{Pubkey: "ward1", Kind: 4, CreatedAt: 200},        // encrypted, ward
+		{Pubkey: "ward1", Kind: 1, CreatedAt: 210},        //
+		{Pubkey: "stranger1", Kind: 1059, CreatedAt: 300}, // encrypted, stranger
+	}}
+	if err := AppendLedger(c.ledgerPath(), Entry{Verb: VerbElevate, Pubkey: "ward1", Public: false, Timestamp: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, c)
+	census := readCensus(t, c)
+
+	// The ward's encrypted event counts on the OUTER side: classifying it
+	// as citizen would reveal ward status by subtraction.
+	if census.Encrypted.PublicCitizens != 1 || census.Encrypted.Outer != 2 {
+		t.Fatalf("encrypted = %+v, want public_citizens=1 (the Lord) outer=2 (ward + stranger)", census.Encrypted)
+	}
+	// The ward appears in stale_outer exactly like a stranger.
+	foundWard := false
+	for _, e := range census.StaleOuter {
+		if e.Pubkey == "ward1" {
+			foundWard = true
+		}
+	}
+	if !foundWard {
+		t.Fatalf("stale_outer = %+v, want ward1 present as an ordinary outer author", census.StaleOuter)
+	}
+	// And no author entry carries any field beyond the event-derived four
+	// — a status marker (ward/citizen/favorite/protected) on an author row
+	// is exactly the leak the census rule forbids. Checked against the
+	// served bytes, not the Go struct, per the standing grep-the-payload
+	// discipline.
+	var payload struct {
+		AllAuthors []map[string]any `json:"all_authors"`
+	}
+	if err := json.Unmarshal([]byte(readRaw(t, c.censusPath())), &payload); err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"pubkey": true, "events": true, "first_seen": true, "last_seen": true}
+	for _, entry := range payload.AllAuthors {
+		for key := range entry {
+			if !allowed[key] {
+				t.Fatalf("author entry %v carries non-event-derived field %q", entry, key)
+			}
+		}
+	}
+}
+
 func TestCheckRelease_CachesDaily(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	c := newTestCycle(t, &fakeFetcher{})

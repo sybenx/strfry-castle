@@ -255,6 +255,49 @@ a newer tag and exposes it in `stats.json`; towncrier shows the Lord a
 banner with the one-line update command. No self-updating machinery in v1
 (see DECISIONS.md).
 
+**Version comparison is steward's job, not towncrier's.** steward knows
+its own build-stamping conventions (`git describe`, ldflags, the `dev`
+fallback); towncrier only renders what steward decides. steward normalizes
+`version.running`/`version.latest` (or adds a derived signal) so that
+"is an update actually available" is answered once, in Go, under test —
+never inferred client-side from raw tag strings via regex.
+
+### The Census
+
+Public DB-transparency layer, added by formal re-scope (see DECISIONS.md,
+"The Census re-scope"). Governing rule: **the public surface may display
+only what an anonymous client could discover by querying the relay
+directly.** strfry has no read gating, so authors, kinds, counts, and
+timestamps are all anonymously derivable and may be public. Nothing in the
+census is ever computed from steward's private state.
+
+- Every cycle, the SAME full scan that already counts the Outer Lands also
+  aggregates per-author `{events, first_seen, last_seen}`, per-kind
+  totals, and encrypted-event counts (kinds 4 + 1059, aggregate only —
+  gift wraps are signed by one-time keys, attribution is impossible even
+  in principle). Ephemeral kinds (20000–29999) are excluded. Written
+  atomically to `census.json` (a derived, regenerable view).
+- `GET /api/census` — public, unauthenticated, like `/api/stats`.
+- **Ward nuance:** ward pubkeys MAY appear in the census as ordinary
+  authors (their events are on an open relay; unavoidable), but never
+  with any status marker. Any citizen/stranger split in census output is
+  computed from PUBLIC components only (tree ∪ follows ∪ favorites ∪ the
+  Lord — `publicCitizenPubkeys`); under it a ward classifies as an
+  ordinary outer author, exactly what an anonymous observer sees. Using
+  the full (ward-inclusive) citizen set anywhere in census output is a
+  release-blocking bug, same severity as a ward in stats.json.
+- towncrier renders capped views only (top authors, longest-quiet outer
+  authors, totals, kind and encrypted counts) plus a download link to the
+  full census JSON — never the entire author list as DOM.
+- **The event viewer**: towncrier can show the events this relay stores
+  for one pubkey — a plain NIP-01 `REQ` over websocket straight to the
+  relay, rendered as raw escaped text, capped (50 events, truncated
+  content). Deliberately unauthenticated: the relay answers those queries
+  for anyone, so gating the viewer would protect nothing. Raw text only —
+  no media, no threads, no reactions; the moment it grows client
+  features, it has become the rejected "towncrier as a feed" and must be
+  cut back.
+
 ## towncrier (the page)
 
 ONE `index.html`. Vanilla JS, hand-written CSS, dark castle aesthetic,
