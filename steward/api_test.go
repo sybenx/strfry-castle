@@ -600,6 +600,77 @@ func TestRateLimiter_BlocksAfterLimit(t *testing.T) {
 	}
 }
 
+// --- GET /api/stats: first-cycle-pending degrade ---
+
+func TestHandleStats_PendingBeforeFirstCycle(t *testing.T) {
+	_, ownerPub := genKeypair(t)
+	now := time.Unix(2_000_000, 0)
+	s := newAPIServer(t, ownerPub, now)
+
+	req := httptest.NewRequest("GET", "http://castle.example/api/stats", nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 before stats.json exists", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if !strings.Contains(body["error"], "first sync") {
+		t.Fatalf("error = %q, want it to mention the first sync being in progress", body["error"])
+	}
+}
+
+func TestHandleStats_GenericUnavailableAfterFirstCycleWithNoStats(t *testing.T) {
+	_, ownerPub := genKeypair(t)
+	now := time.Unix(2_000_000, 0)
+	s := newAPIServer(t, ownerPub, now)
+	s.MarkFirstCycleDone()
+
+	req := httptest.NewRequest("GET", "http://castle.example/api/stats", nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 when stats.json still doesn't exist", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if strings.Contains(body["error"], "first sync") {
+		t.Fatalf("error = %q, should no longer blame first-sync pendency once it's marked done", body["error"])
+	}
+}
+
+func TestHandleStats_ServesStatsOnceWritten(t *testing.T) {
+	_, ownerPub := genKeypair(t)
+	now := time.Unix(2_000_000, 0)
+	s := newAPIServer(t, ownerPub, now)
+
+	if err := writeJSONAtomic(s.Cycle.statsPath(), Stats{TheLord: LordStats{Pubkey: ownerPub}}); err != nil {
+		t.Fatalf("write stats.json: %v", err)
+	}
+
+	// A pending first cycle must not shadow stats.json once it actually exists.
+	req := httptest.NewRequest("GET", "http://castle.example/api/stats", nil)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 once stats.json exists, body: %s", w.Code, w.Body)
+	}
+	var stats Stats
+	if err := json.Unmarshal(w.Body.Bytes(), &stats); err != nil {
+		t.Fatalf("decode stats: %v", err)
+	}
+	if stats.TheLord.Pubkey != ownerPub {
+		t.Fatalf("the_lord.pubkey = %q, want %q", stats.TheLord.Pubkey, ownerPub)
+	}
+}
+
 func TestAPI_UnknownAPIPathIs404NotStaticFallback(t *testing.T) {
 	_, ownerPub := genKeypair(t)
 	now := time.Unix(2_000_000, 0)

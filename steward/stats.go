@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -318,7 +319,7 @@ func (c *Cycle) generateStats(ctx context.Context, state *State, follows Follows
 
 	version := VersionInfo{Running: c.RunningVersion}
 	if latest, err := c.checkRelease(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "steward: release check: %v\n", err)
+		slog.Warn("release check failed", "error", err)
 	} else {
 		version.Latest = latest
 	}
@@ -348,6 +349,11 @@ func (c *Cycle) generateStats(ctx context.Context, state *State, follows Follows
 	if err := writeJSONAtomic(c.statsPath(), stats); err != nil {
 		return fmt.Errorf("stats: write stats.json: %w", err)
 	}
+	slog.Info("stats generated",
+		"lord_events", lordEvents,
+		"citizen_events", citizenEvents,
+		"outer_lands_events", outerEvents,
+	)
 
 	subjects := nameCacheSubjects(state, evicted)
 	if err := c.refreshNameCache(ctx, subjects); err != nil {
@@ -421,7 +427,7 @@ func (c *Cycle) refreshNameCache(ctx context.Context, subjects []string) error {
 	path := c.nameCachePath()
 	old, err := readNameCache(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "steward: read name cache: %v (starting fresh)\n", err)
+		slog.Warn("read name cache failed, starting fresh", "error", err)
 		old = NameCache{}
 	}
 
@@ -440,7 +446,7 @@ func (c *Cycle) refreshNameCache(ctx context.Context, subjects []string) error {
 		relays := append([]string{c.OwnRelay}, c.PublicRelays...)
 		events, err := c.Fetcher.LatestKind0s(ctx, relays, stale)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "steward: kind-0 refresh failed: %v\n", err)
+			slog.Warn("kind-0 refresh failed", "error", err)
 			events = nil
 		}
 		for _, pk := range stale {

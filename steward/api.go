@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -68,6 +69,21 @@ type Server struct {
 
 	replay *replayGuard
 	rate   *rateLimiter
+
+	// firstCycleDone is set once main.go's initial post-startup cycle
+	// finishes (main.go now starts the HTTP server before that cycle
+	// completes, so towncrier can be reachable while follows sync and the
+	// first strfry scans are still running). handleStats uses it to tell
+	// "steward is still completing its first sync" apart from a genuine
+	// failure to ever produce stats.json.
+	firstCycleDone atomic.Bool
+}
+
+// MarkFirstCycleDone records that the initial cycle has finished (whether
+// it succeeded or failed) so handleStats stops treating a missing
+// stats.json as expected startup lag.
+func (s *Server) MarkFirstCycleDone() {
+	s.firstCycleDone.Store(true)
 }
 
 // NewServer builds a Server around an already-configured Cycle. relayURL is
@@ -489,6 +505,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	data, err := os.ReadFile(s.Cycle.statsPath())
 	if err != nil {
+		if !s.firstCycleDone.Load() {
+			writeError(w, http.StatusServiceUnavailable, "steward is completing its first sync, try again shortly")
+			return
+		}
 		writeError(w, http.StatusServiceUnavailable, "stats not yet generated")
 		return
 	}

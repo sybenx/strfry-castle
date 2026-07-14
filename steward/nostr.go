@@ -6,8 +6,7 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
+	"log/slog"
 	"time"
 
 	"github.com/nbd-wtf/go-nostr"
@@ -49,7 +48,7 @@ func (relayFetcher) LatestKind3(ctx context.Context, relayURLs []string, pubkey 
 	for _, url := range relayURLs {
 		events, err := queryRelay(ctx, url, filter)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "steward: kind-3 fetch from %s: %v\n", url, err)
+			slog.Warn("kind-3 fetch failed", "relay", url, "error", err)
 			continue
 		}
 		for _, ev := range events {
@@ -71,7 +70,7 @@ func (relayFetcher) LatestKind0s(ctx context.Context, relayURLs []string, pubkey
 		filter := nostr.Filter{Kinds: []int{0}, Authors: remaining}
 		events, err := queryRelay(ctx, url, filter)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "steward: kind-0 fetch from %s: %v\n", url, err)
+			slog.Warn("kind-0 fetch failed", "relay", url, "error", err)
 			continue
 		}
 		for _, ev := range events {

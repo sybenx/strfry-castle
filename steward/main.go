@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -102,7 +103,7 @@ func envInt(key string, def int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "steward: invalid %s=%q, using default %d: %v\n", key, v, def, err)
+		slog.Warn("invalid env var, using default", "key", key, "value", v, "default", def, "error", err)
 		return def
 	}
 	return n
@@ -115,7 +116,7 @@ func envBool(key string, def bool) bool {
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "steward: invalid %s=%q, using default %v: %v\n", key, v, def, err)
+		slog.Warn("invalid env var, using default", "key", key, "value", v, "default", def, "error", err)
 		return def
 	}
 	return b
@@ -160,11 +161,28 @@ func writeJSONAtomic(path string, v interface{}) error {
 }
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	cfg, err := loadConfig()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "steward: %v\n", err)
+		slog.Error("startup failed", "error", err)
 		os.Exit(1)
 	}
+
+	slog.Info("steward starting",
+		"version", buildVersion,
+		"owner_pubkey", cfg.OwnerPubkey,
+		"strfry_container", cfg.StrfryContainer,
+		"public_relays", cfg.PublicRelays,
+		"outer_ttl_days", cfg.OuterTTLDays,
+		"cycle_minutes", cfg.CycleMinutes,
+		"raid_cron", cfg.RaidCron,
+		"raid_dry_run", cfg.RaidDryRun,
+		"max_invites", cfg.MaxInvites,
+		"max_depth", cfg.MaxDepth,
+		"listen", cfg.Listen,
+		"relay_url", cfg.RelayURL,
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -174,11 +192,9 @@ func main() {
 
 	runCycle := func() {
 		if err := cycle.Run(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "steward: cycle failed: %v\n", err)
+			slog.Error("cycle failed", "error", err)
 		}
 	}
-
-	runCycle()
 
 	// RAID_CRON is optional: empty (the default) means manual raids only.
 	// Scheduled raids always use the standing OUTER_TTL_DAYS (no override)
@@ -192,12 +208,13 @@ func main() {
 			_, err := cycle.Raid(ctx, nil, false, "cron")
 			server.mu.Unlock()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "steward: scheduled raid failed: %v\n", err)
+				slog.Error("scheduled raid failed", "error", err)
 			}
 		})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "steward: invalid RAID_CRON=%q, scheduled raids disabled: %v\n", cfg.RaidCron, err)
+			slog.Warn("invalid RAID_CRON, scheduled raids disabled", "raid_cron", cfg.RaidCron, "error", err)
 		} else {
+			slog.Info("scheduled raids registered", "raid_cron", cfg.RaidCron)
 			scheduler.Start()
 			defer scheduler.Stop()
 		}
@@ -205,16 +222,27 @@ func main() {
 
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: server.Handler()}
 	go func() {
+		slog.Info("http server listening", "addr", cfg.Listen)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(os.Stderr, "steward: http server: %v\n", err)
+			slog.Error("http server failed", "error", err)
 		}
 	}()
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			fmt.Fprintf(os.Stderr, "steward: http server shutdown: %v\n", err)
+			slog.Error("http server shutdown failed", "error", err)
 		}
+	}()
+
+	// The first cycle runs in the background so the HTTP server (and
+	// towncrier) come up immediately instead of blocking on follows sync
+	// and strfry scans. server.firstCycleDone lets /api/stats tell "still
+	// completing the first sync" apart from a genuine failure to ever
+	// produce stats.json.
+	go func() {
+		runCycle()
+		server.MarkFirstCycleDone()
 	}()
 
 	ticker := time.NewTicker(time.Duration(cfg.CycleMinutes) * time.Minute)

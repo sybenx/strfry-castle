@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -70,6 +71,9 @@ func (c *Cycle) releaseCachePath() string { return filepath.Join(c.StateDir, "re
 // tree.json rewritten atomically), then stats (stats.json, the name cache,
 // and the daily release check).
 func (c *Cycle) Run(ctx context.Context) error {
+	start := time.Now()
+	slog.Info("cycle starting")
+
 	entries, err := ReadLedger(c.ledgerPath())
 	if err != nil {
 		return fmt.Errorf("cycle: read ledger: %w", err)
@@ -98,6 +102,11 @@ func (c *Cycle) Run(ctx context.Context) error {
 		return fmt.Errorf("cycle: generate stats: %w", err)
 	}
 
+	slog.Info("cycle complete",
+		"duration", time.Since(start),
+		"tree_members", len(state.Tree.Members),
+		"follows", len(follows.Pubkeys),
+	)
 	return nil
 }
 
@@ -134,14 +143,14 @@ func (c *Cycle) syncFollows(ctx context.Context) (FollowsSnapshot, error) {
 	path := c.followsPath()
 	current, err := readFollows(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "steward: read follows.json: %v (keeping empty)\n", err)
+		slog.Warn("read follows.json failed, keeping empty", "error", err)
 		current = FollowsSnapshot{}
 	}
 
 	relays := append([]string{c.OwnRelay}, c.PublicRelays...)
 	latest, err := c.Fetcher.LatestKind3(ctx, relays, c.Owner)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "steward: follows sync failed, keeping previous snapshot: %v\n", err)
+		slog.Warn("follows sync failed, keeping previous snapshot", "error", err)
 		return current, nil
 	}
 	if latest == nil || int64(latest.CreatedAt) <= current.CreatedAt {
@@ -157,7 +166,7 @@ func (c *Cycle) syncFollows(ctx context.Context) (FollowsSnapshot, error) {
 	sort.Strings(pubkeys)
 	next := FollowsSnapshot{Pubkeys: pubkeys, Source: latest.ID, CreatedAt: int64(latest.CreatedAt)}
 	if err := writeJSONAtomic(path, next); err != nil {
-		fmt.Fprintf(os.Stderr, "steward: write follows.json: %v (keeping previous)\n", err)
+		slog.Warn("write follows.json failed, keeping previous", "error", err)
 		return current, nil
 	}
 	return next, nil

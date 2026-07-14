@@ -237,6 +237,7 @@ let latestStats = null;
 let latestTree = null;
 let raidPreview = null; // {days, events} from the last successful raid preview
 let relayURL = null; // RELAY_URL from /api/config, or null for same-origin mode
+let startupRetryTimer = null; // pending refreshAll() retry while steward's first cycle is still running
 
 function memberRow(pk, name, picture, extraClass, starred){
   const label = esc(name) || short(pk);
@@ -275,7 +276,11 @@ function fmtExpiry(unixSeconds, raidsAreManual){
 
 async function fetchJSON(path){
   const res = await fetch(path, {headers: {Accept: 'application/json'}});
-  if (!res.ok) throw new Error(path + ': ' + res.status);
+  if (!res.ok) {
+    const err = new Error(path + ': ' + res.status);
+    err.status = res.status;
+    throw err;
+  }
   return res.json();
 }
 
@@ -400,6 +405,16 @@ async function refreshAll(){
     }
   } catch (e) {
     console.error(e);
+    clearTimeout(startupRetryTimer);
+    if (e.status === 503) {
+      // steward's first post-startup cycle (follows sync, initial strfry
+      // scans) is still running — retry instead of reporting a failure.
+      document.querySelectorAll('.empty').forEach(el => {
+        el.textContent = 'the castle is still waking up…';
+      });
+      startupRetryTimer = setTimeout(refreshAll, 3000);
+      return;
+    }
     document.querySelectorAll('.empty').forEach(el => {
       el.textContent = 'could not load';
       el.classList.add('err');

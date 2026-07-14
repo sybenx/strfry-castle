@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"log/slog"
 	"os/exec"
 	"sort"
 	"time"
@@ -56,7 +56,7 @@ func (d *dockerStrfryCLI) DeleteByAuthors(ctx context.Context, pubkeys []string,
 			return 0, err
 		}
 		if dryRun {
-			fmt.Fprintf(os.Stderr, "steward: [dry-run] would delete %d authors: %s\n", len(batch), filter)
+			slog.Info("dry-run: would delete authors' events", "authors", len(batch), "filter", string(filter))
 			continue
 		}
 		cmd := exec.CommandContext(ctx, "docker", "exec", d.Container, strfryBinPath, "delete", "--filter", string(filter))
@@ -64,7 +64,7 @@ func (d *dockerStrfryCLI) DeleteByAuthors(ctx context.Context, pubkeys []string,
 		if err != nil {
 			return 0, fmt.Errorf("strfry delete: %w: %s", err, out)
 		}
-		fmt.Fprintf(os.Stderr, "steward: deleted %d authors' events\n", len(batch))
+		slog.Info("deleted authors' events", "authors", len(batch))
 	}
 	return len(pubkeys), nil
 }
@@ -160,6 +160,8 @@ func (c *Cycle) Raid(ctx context.Context, ttlDaysOverride *int, dryRun bool, sou
 		return RaidResult{}, fmt.Errorf("raid: read follows: %w", err)
 	}
 
+	slog.Info("raid starting", "ttl_days", ttlDays, "dry_run", effectiveDryRun)
+
 	now := c.Now().Unix()
 	result, err := RunRaid(ctx, c.Scanner, c.CLI, state, follows.Pubkeys, ttlDays, c.OuterTTLDays, now, effectiveDryRun)
 	if err != nil {
@@ -174,6 +176,7 @@ func (c *Cycle) Raid(ctx context.Context, ttlDaysOverride *int, dryRun bool, sou
 		return RaidResult{}, fmt.Errorf("raid: append ledger: %w", err)
 	}
 
+	slog.Info("raid complete", "ttl_days", ttlDays, "dry_run", effectiveDryRun, "events", result.Events)
 	return result, nil
 }
 
