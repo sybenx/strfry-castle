@@ -399,6 +399,30 @@ now load-bearing in CLAUDE.md ("The Census"):
   unchanged), and any sender attribution for encrypted events (NIP-59
   one-time keys make it impossible; counts are aggregate only).
 
+## Lord name/avatar resolution + npub-correct njump links (2026-07-15)
+
+Two bugs found in towncrier's public view, both against CLAUDE.md's own
+towncrier spec ("The Lord — linked npub, resolved name/avatar"):
+
+- **The Lord row never had a name or picture.** The kind-0 name-cache
+  subject list (`nameCacheSubjects` in stats.go) was tree members ∪
+  public favorites ∪ evicted-in-grace only — the Lord's own pubkey was
+  never in it, so `/api/tree` had nothing to resolve for `data.owner` and
+  towncrier always fell back to a bare short-pubkey with no avatar. Fixed
+  by adding `state.Owner` to the subject set and returning
+  `owner_name`/`owner_picture` on `TreeResponse`. CLAUDE.md's "Name cache
+  and update banner" and `/api/tree` bullets updated to say "the Lord ∪
+  tree members ∪ ..." instead of omitting him — this was a spec/code
+  mismatch, not a new scope decision.
+- **njump links were hex, not npub.** `njumpURL` concatenated the raw hex
+  pubkey onto `https://njump.me/`, which njump does not resolve (it
+  expects bech32 `npub1...`). Fixed with a small hand-rolled bech32
+  encoder in towncrier (no dependency, per "light as a whip") — verified
+  against the NIP-19 spec's own test vector
+  (`7e7e9c42...` → `npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma9sf7yygh`).
+  Applies everywhere `njumpURL` is called (Lord, tree, favored, evicted,
+  event-viewer author link) since it was the same helper for all of them.
+
 ## Accepted trade-offs (known, intentional)
 
 - **docker.sock mount is root-equivalent** on the host from an

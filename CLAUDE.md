@@ -225,10 +225,11 @@ cookies.
 
 - `GET  /api/stats` — public. `stats.json`.
 - `GET  /api/tree` — public. Tree with kind-0 names/pictures resolved by
-  steward and favorite stars, plus a `favored` array of non-tree favorites
-  and names for the evicted list. The name cache covers tree members ∪
-  public favorites ∪ evicted members inside their grace window — never
-  wards.
+  steward and favorite stars, plus a `favored` array of non-tree favorites,
+  the Lord's own resolved name/picture (`owner_name`/`owner_picture`), and
+  names for the evicted list. The name cache covers the Lord ∪ tree
+  members ∪ public favorites ∪ evicted members inside their grace window —
+  never wards.
 - `GET  /api/wards` — **Lord only.** The ward list.
 - `POST /api/invite {pubkey, label?}` — tree members + Lord. Enforce
   MAX_INVITES / MAX_DEPTH. Accept npub or hex everywhere a pubkey is
@@ -247,10 +248,12 @@ only.
 
 ### Name cache and update banner
 
-Kind-0 name/avatar cache for tree members, public favorites, and evicted
-members inside their grace window (local relay first, PUBLIC_RELAYS
-fallback; atomic cache file; lazy refresh with a staleness threshold;
-never wards). Once a day steward checks the project's GitHub releases for
+Kind-0 name/avatar cache for the Lord, tree members, public favorites, and
+evicted members inside their grace window (local relay first,
+PUBLIC_RELAYS fallback; atomic cache file; lazy refresh with a staleness
+threshold; never wards). The Lord is in the subject list so towncrier's
+"linked npub, resolved name/avatar" Lord row (see towncrier's Public view)
+has a profile to render instead of a bare pubkey. Once a day steward checks the project's GitHub releases for
 a newer tag and exposes it in `stats.json`; towncrier shows the Lord a
 banner with the one-line update command. No self-updating machinery in v1
 (see DECISIONS.md).

@@ -620,10 +620,13 @@ type NameCache map[string]NameCacheEntry
 // this is reused as-is rather than re-fetched.
 const nameCacheStaleness = 24 * time.Hour
 
-// nameCacheSubjects is tree members ∪ public favorites ∪ evicted-in-grace —
-// CLAUDE.md's exact name-cache coverage. Never wards.
+// nameCacheSubjects is the Lord ∪ tree members ∪ public favorites ∪
+// evicted-in-grace — CLAUDE.md's name-cache coverage, plus the Lord so
+// towncrier's "linked npub, resolved name/avatar" Lord row has a profile to
+// show. Never wards.
 func nameCacheSubjects(state *State, evicted []EvictedEntry) []string {
 	set := make(map[string]bool)
+	set[state.Owner] = true
 	for pk := range state.Tree.Members {
 		set[pk] = true
 	}

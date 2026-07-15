@@ -576,10 +576,12 @@ type EvictedTreeView struct {
 // can never enter Members/Favored, and evictedInGrace carries no visibility
 // info at all.
 type TreeResponse struct {
-	Owner   string            `json:"owner"`
-	Members []TreeMemberView  `json:"members"`
-	Favored []FavoredView     `json:"favored"`
-	Evicted []EvictedTreeView `json:"evicted"`
+	Owner        string            `json:"owner"`
+	OwnerName    string            `json:"owner_name,omitempty"`
+	OwnerPicture string            `json:"owner_picture,omitempty"`
+	Members      []TreeMemberView  `json:"members"`
+	Favored      []FavoredView     `json:"favored"`
+	Evicted      []EvictedTreeView `json:"evicted"`
 }
 
 func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
@@ -626,11 +628,14 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 		evictedViews = append(evictedViews, EvictedTreeView{Pubkey: e.Pubkey, Name: n.Name, Expires: e.Expires})
 	}
 
+	ownerName := names[state.Owner]
 	writeJSON(w, http.StatusOK, TreeResponse{
-		Owner:   state.Owner,
-		Members: members,
-		Favored: favored,
-		Evicted: evictedViews,
+		Owner:        state.Owner,
+		OwnerName:    ownerName.Name,
+		OwnerPicture: ownerName.Picture,
+		Members:      members,
+		Favored:      favored,
+		Evicted:      evictedViews,
 	})
 }
 
