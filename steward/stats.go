@@ -154,7 +154,8 @@ func (d *dockerStrfryScanner) scan(ctx context.Context, filter map[string]any, f
 
 // Stats is stats.json's schema (CLAUDE.md). Ward counts appear nowhere in
 // it: Citizens is computed from public components only (tree ∪ follows ∪
-// public favorites), never wards.
+// public favorites), and OuterLands classifies authors by that same public
+// set — never the ward-inclusive one (see generateStats's publicSet).
 type Stats struct {
 	UpdatedAt  int64           `json:"updated_at"`
 	Version    VersionInfo     `json:"version"`
@@ -358,15 +359,18 @@ func (c *Cycle) generateStats(ctx context.Context, state *State, follows Follows
 		return fmt.Errorf("stats: count citizens' events: %w", err)
 	}
 
-	allCitizens := make(map[string]bool)
-	for _, pk := range state.Citizens(follows.Pubkeys) {
-		allCitizens[pk] = true
-	}
-	// publicSet classifies census output. It is publicCitizenPubkeys ∪ the
-	// Lord — NEVER the full citizen set above, which contains wards: a
-	// public split computed from it would mark wards as citizens and leak
-	// their status. Under publicSet a ward classifies as an ordinary Outer
-	// Lands author, which is exactly what an anonymous relay query shows.
+	// publicSet classifies census output AND stats.json's outer-lands
+	// numbers. It is publicCitizenPubkeys ∪ the Lord — NEVER the full
+	// citizen set (state.Citizens), which contains wards. Classifying any
+	// public number with the full set opens a subtraction channel: ward
+	// events would land in neither citizens.events nor outer_lands.events,
+	// so the_lord + citizens + outer would fall short of an anonymous relay
+	// scan's total by exactly the ward-authored event count, revealing that
+	// wards exist. Under publicSet a ward classifies as an ordinary Outer
+	// Lands author, exactly what an anonymous relay query shows — the
+	// public outer count therefore OVERSTATES what a raid would purge; the
+	// raid itself (raid.go) keeps the full set, and the Lord's true purge
+	// numbers come from a dry-run raid, never from stats.json.
 	publicSet := make(map[string]bool, len(publicCitizens)+1)
 	for _, pk := range publicCitizens {
 		publicSet[pk] = true
@@ -377,7 +381,9 @@ func (c *Cycle) generateStats(ctx context.Context, state *State, follows Follows
 	var outerOldest int64
 	census := newCensusBuilder(publicSet)
 	err = c.Scanner.ScanAll(ctx, func(pubkey string, kind int, createdAt int64) {
-		if !allCitizens[pubkey] {
+		// Ephemeral kinds are skipped to match the census, keeping the
+		// published accounting identity exact (strfry stores none anyway).
+		if !isEphemeralKind(kind) && !publicSet[pubkey] {
 			outerEvents++
 			if outerOldest == 0 || createdAt < outerOldest {
 				outerOldest = createdAt

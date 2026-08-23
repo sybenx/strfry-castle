@@ -423,6 +423,22 @@ towncrier spec ("The Lord — linked npub, resolved name/avatar"):
   Applies everywhere `njumpURL` is called (Lord, tree, favored, evicted,
   event-viewer author link) since it was the same helper for all of them.
 
+## stats.json outer-lands counts classify by the PUBLIC set (2026-08-23)
+
+`outer_lands.events`/`oldest` were computed against the full ward-inclusive
+citizen set, while `citizens.events` used public components only — so ward
+events landed in neither bucket, and `the_lord + citizens + outer` fell
+short of an anonymous relay scan's total (or `/api/census`'s) by exactly
+the ward-authored event count. That subtraction channel, computable from
+public endpoints alone, revealed that wards exist — the same class of leak
+the census rule calls release-blocking. Fixed: stats' outer classification
+now uses the census's publicSet (tree ∪ follows ∪ favorites ∪ the Lord), so
+a ward's events count as outer publicly and the published totals sum to the
+census total (pinned by TestStats_NoWardSubtractionChannel). Consequence,
+accepted: the public outer count OVERSTATES what a raid would purge; the
+raid itself keeps the full set, and the Lord's true purge numbers come from
+a dry-run raid, never from stats.json.
+
 ## Accepted trade-offs (known, intentional)
 
 - **docker.sock mount is root-equivalent** on the host from an

@@ -121,14 +121,55 @@ func TestStats_CitizenAndOuterLandsCounts(t *testing.T) {
 	if stats.Citizens.Events != 4 { // m1(3) + f1(1); w1 is a ward, excluded from the public count
 		t.Fatalf("citizens.events = %d, want 4 (public components only)", stats.Citizens.Events)
 	}
-	if stats.OuterLands.Events != 2 { // stranger1 + stranger2 only; w1 IS a citizen (a ward) so its events are not outer lands
-		t.Fatalf("outer_lands.events = %d, want 2", stats.OuterLands.Events)
+	if stats.OuterLands.Events != 7 { // stranger1(1) + stranger2(1) + w1(5): a ward classifies as outer in PUBLIC output, or the totals' gap would reveal ward events exist
+		t.Fatalf("outer_lands.events = %d, want 7 (ward events count as outer publicly)", stats.OuterLands.Events)
 	}
 	if stats.OuterLands.Oldest != 50 {
 		t.Fatalf("outer_lands.oldest = %d, want 50", stats.OuterLands.Oldest)
 	}
 	if stats.OuterLands.TTLDays != 30 { // the standing OUTER_TTL_DAYS, so towncrier's raid control can pre-fill it
 		t.Fatalf("outer_lands.ttl_days = %d, want 30", stats.OuterLands.TTLDays)
+	}
+}
+
+// TestStats_NoWardSubtractionChannel: the accounting identity
+// the_lord.events + citizens.events + outer_lands.events == census.events
+// must hold even when a ward has stored events. If outer were classified by
+// the ward-inclusive citizen set, ward events would land in neither bucket
+// and the gap — computable entirely from public endpoints — would reveal
+// that wards exist and how many events they authored.
+func TestStats_NoWardSubtractionChannel(t *testing.T) {
+	c := newTestCycle(t, &fakeFetcher{})
+	c.Scanner = &fakeScanner{events: []fakeStoredEvent{
+		{Pubkey: testOwner, Kind: 1, CreatedAt: 100},
+		{Pubkey: "m1", Kind: 1, CreatedAt: 200},
+		{Pubkey: "ward1", Kind: 1, CreatedAt: 300},
+		{Pubkey: "ward1", Kind: 1, CreatedAt: 310},
+		{Pubkey: "ward1", Kind: 4, CreatedAt: 320},
+		{Pubkey: "stranger1", Kind: 1, CreatedAt: 400},
+	}}
+	if err := AppendLedger(c.ledgerPath(), Entry{Verb: VerbInvite, Pubkey: "m1", InvitedBy: testOwner, Timestamp: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendLedger(c.ledgerPath(), Entry{Verb: VerbElevate, Pubkey: "ward1", Public: false, Timestamp: 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	mustRun(t, c)
+
+	var stats Stats
+	if err := json.Unmarshal([]byte(readRaw(t, c.statsPath())), &stats); err != nil {
+		t.Fatal(err)
+	}
+	census := readCensus(t, c)
+
+	if stats.OuterLands.Events != 4 { // ward1(3) + stranger1(1)
+		t.Fatalf("outer_lands.events = %d, want 4 (ward events classify as outer)", stats.OuterLands.Events)
+	}
+	published := stats.TheLord.Events + stats.Citizens.Events + stats.OuterLands.Events
+	if published != census.Events {
+		t.Fatalf("published totals %d (lord %d + citizens %d + outer %d) != census total %d: the gap reveals ward events",
+			published, stats.TheLord.Events, stats.Citizens.Events, stats.OuterLands.Events, census.Events)
 	}
 }
 

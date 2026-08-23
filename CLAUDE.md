@@ -100,11 +100,16 @@ Rules:
   success) — it never toggles blindly.
 
 **PRIVACY INVARIANT — wards appear in NO public output.** Not the tree, not
-the favored list, not `stats.json`, not any count. Public citizen counts are
-computed from public components only (tree + follows + favorites); if wards
-were included, subtraction would reveal their number. `GET /api/wards`
-answers only Lord-signed requests. Wards live in steward's private state
-files, which are never an API response.
+the favored list, not `stats.json`, not any count. Public citizen counts AND
+public event counts (including `outer_lands`) are computed from public
+components only (tree + follows + favorites + the Lord); if wards were
+included anywhere, subtraction would reveal their number — a ward's events
+must classify as ordinary outer events in every public number, so published
+totals always sum to what an anonymous relay scan sees. (Consequence: the
+public outer count overstates what a raid would purge; the true number comes
+from a Lord-only dry-run raid.) `GET /api/wards` answers only Lord-signed
+requests. Wards live in steward's private state files, which are never an
+API response.
 
 ## The invite tree (Pyramid mechanics)
 
