@@ -56,7 +56,9 @@ decides what survives. At raid time an event is KEPT iff any of:
 1. its author is a **citizen** — {Lord} ∪ tree members ∪ current follows ∪
    elevated (favorites and wards alike);
 2. its author is an **evicted member inside the grace window** — evicted
-   less than `OUTER_TTL_DAYS` ago (removal timestamps come from the ledger);
+   less than `OUTER_TTL_DAYS` ago (removal timestamps come from the ledger),
+   or unfollowed by the Lord less than `OUTER_TTL_DAYS` ago (departure
+   timestamps come from `departures.json`);
 3. it is **younger than the cutoff** (`now − ttl_days`).
 
 Everything else is deleted. Load-bearing subtleties:
@@ -165,7 +167,13 @@ what makes state auditable.**
 - `follows.json` — last-good snapshot of the Lord's kind-3 pubkey list plus
   the source event id and created_at. Exists so a steward restart during a
   network outage cannot shrink the citizenry. Only ever replaced by a
-  *newer* kind 3.
+  *newer* kind 3, and never by one listing zero follows while the
+  snapshot is non-empty. Unreadable means the cycle halts and raids
+  refuse; it never reads as an empty list.
+- `departures.json`: pubkey to the steward-clock time it dropped out of
+  the follow list, for the grace window. Written before follows.json,
+  cleared on re-follow. Durable (follows.json keeps no history), same
+  unreadable-means-halt rule.
 - Everything else (`tree.json`, `citizens.json`, `stats.json`, kind-0 name
   cache) is a derived, regenerable view. All state-file writes are atomic
   (temp file in the SAME directory + rename).

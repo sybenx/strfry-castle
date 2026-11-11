@@ -439,6 +439,37 @@ accepted: the public outer count OVERSTATES what a raid would purge; the
 raid itself keeps the full set, and the Lord's true purge numbers come from
 a dry-run raid, never from stats.json.
 
+## Unfollows get the grace window; a broken follow list never feeds a raid (2026-11-11)
+
+Before this, follows.json was replaced wholesale by any newer kind-3, an
+unreadable follows.json read as "no follows", and only ledger evictions
+had grace. One empty contact list from a cold-cache client, with
+RAID_CRON armed, meant every follow's stored events were deleted at the
+next raid. "Losing citizenship is not a purge" already covered this; the
+code had not caught up.
+
+- **Departure times live in `departures.json`, not the ledger.** The
+  ledger is the record of admin actions taken through steward's API, each
+  with a request-id source; an unfollow happens on Nostr and has no such
+  source. The file holds pubkeys and timestamps only (the state
+  invariant allows that) and is durable, since follows.json keeps no
+  history to rebuild it from.
+- **Stamped with steward's clock when the drop is observed**, never the
+  kind-3's created_at, so an old or backdated event cannot close the
+  window early. Grace is OUTER_TTL_DAYS, the same pinned value evictions
+  use; no new setting.
+- **A zero-follow kind-3 never replaces a non-empty snapshot.** It is
+  logged every cycle until a newer non-empty kind-3 arrives. Cost: a Lord
+  who truly wants to unfollow everyone cannot, today.
+- **An unreadable follows.json or departures.json halts the cycle and
+  makes raids refuse.** No auto-heal from the next kind-3: with the old
+  list unknown, departures cannot be computed, so healing would drop grace
+  for whoever left. A human restores or deletes the file.
+- **Open for the Lord: large partial shrinks** (say half the list gone in
+  one update) are applied today, with every dropped pubkey getting the
+  full grace window. Whether to hold them (threshold, N consecutive
+  cycles, or explicit confirmation) is not yet decided.
+
 ## Accepted trade-offs (known, intentional)
 
 - **docker.sock mount is root-equivalent** on the host from an

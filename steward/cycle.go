@@ -61,6 +61,7 @@ func NewCycle(cfg config, fetcher NostrFetcher, scanner strfryScanner, cli strfr
 
 func (c *Cycle) ledgerPath() string       { return filepath.Join(c.StateDir, "ledger.jsonl") }
 func (c *Cycle) followsPath() string      { return filepath.Join(c.StateDir, "follows.json") }
+func (c *Cycle) departuresPath() string   { return filepath.Join(c.StateDir, "departures.json") }
 func (c *Cycle) citizensPath() string     { return filepath.Join(c.StateDir, "citizens.json") }
 func (c *Cycle) treePath() string         { return filepath.Join(c.StateDir, "tree.json") }
 func (c *Cycle) statsPath() string        { return filepath.Join(c.StateDir, "stats.json") }
@@ -136,16 +137,96 @@ func readFollows(path string) (FollowsSnapshot, error) {
 	return snap, nil
 }
 
+// Departures is departures.json's schema: pubkey -> unix time steward first
+// saw them missing from the Lord's follow list. It gives unfollowed pubkeys
+// the same OUTER_TTL_DAYS grace the ledger gives evicted members ("Losing
+// citizenship is not a purge"). It lives outside the ledger because the
+// ledger records admin actions taken through the API; an unfollow happens on
+// Nostr, not here. Durable, not derived: follows.json keeps no history, so
+// this file cannot be rebuilt.
+type Departures struct {
+	Departed map[string]int64 `json:"departed"`
+}
+
+// readDepartures returns an empty, non-nil map when the file does not exist
+// yet. Any other read or parse failure is an error: callers must not treat
+// an unreadable grace record as "nobody is in grace".
+func readDepartures(path string) (map[string]int64, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]int64{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var d Departures
+	if err := json.Unmarshal(data, &d); err != nil {
+		return nil, err
+	}
+	if d.Departed == nil {
+		d.Departed = map[string]int64{}
+	}
+	return d.Departed, nil
+}
+
+// recordDepartures updates departed in place for a follow-list change from
+// prev to next and reports whether anything changed. Anyone in prev but not
+// next departs at now (steward's own clock, never the kind-3's created_at,
+// so an old event cannot backdate a departure past the grace window). An
+// existing entry for someone in prev is overwritten: they were a follow
+// until this update, so any older stamp is stale. Anyone in next is
+// cleared (re-followed). Entries for pubkeys in neither list are ongoing
+// grace windows and are left alone.
+func recordDepartures(departed map[string]int64, prev, next []string, now int64) bool {
+	inNext := make(map[string]bool, len(next))
+	for _, pk := range next {
+		inNext[pk] = true
+	}
+	changed := false
+	for _, pk := range next {
+		if _, ok := departed[pk]; ok {
+			delete(departed, pk)
+			changed = true
+		}
+	}
+	for _, pk := range prev {
+		if !inNext[pk] {
+			departed[pk] = now
+			changed = true
+		}
+	}
+	return changed
+}
+
 // syncFollows fetches the Lord's newest kind-3 across OwnRelay + PublicRelays
 // and replaces follows.json only if it is newer than what's on disk. Any
-// fetch failure (or no kind-3 found anywhere) keeps the previous snapshot —
-// "never shrink on error" — and is logged, never fatal to the cycle.
+// fetch failure (or no kind-3 found anywhere) keeps the previous snapshot,
+// "never shrink on error", and is logged, never fatal to the cycle.
+//
+// Fail-safe rules, because a raid deletes whatever stops being a citizen:
+//   - An unreadable follows.json or departures.json is an error that halts
+//     the cycle (citizens.json keeps its last-written contents) instead of
+//     reading as an empty follow list. Raid refuses on the same condition.
+//   - A kind-3 with no follows never replaces a non-empty snapshot. Clients
+//     publishing a contact list from a cold cache is a known failure mode;
+//     it is logged every cycle until a newer, non-empty kind-3 arrives.
+//   - Every other change is applied, and pubkeys that dropped out are
+//     stamped in departures.json (written before follows.json) so the raid
+//     grants them the OUTER_TTL_DAYS grace window.
 func (c *Cycle) syncFollows(ctx context.Context) (FollowsSnapshot, error) {
 	path := c.followsPath()
 	current, err := readFollows(path)
 	if err != nil {
-		slog.Warn("read follows.json failed, keeping empty", "error", err)
-		current = FollowsSnapshot{}
+		slog.Error("follows.json is unreadable; refusing to treat it as an empty follow list. "+
+			"Follows sync and the rest of this cycle are halted, and raids will refuse to run, "+
+			"until it is restored from a backup or removed by hand", "path", path, "error", err)
+		return FollowsSnapshot{}, fmt.Errorf("read follows.json: %w", err)
+	}
+	departed, err := readDepartures(c.departuresPath())
+	if err != nil {
+		slog.Error("departures.json is unreadable; halting follows sync so no grace record is lost. "+
+			"Raids will refuse to run until it is restored or removed by hand", "path", c.departuresPath(), "error", err)
+		return FollowsSnapshot{}, fmt.Errorf("read departures.json: %w", err)
 	}
 
 	relays := append([]string{c.OwnRelay}, c.PublicRelays...)
@@ -164,8 +245,22 @@ func (c *Cycle) syncFollows(ctx context.Context) (FollowsSnapshot, error) {
 			pubkeys = append(pubkeys, tag[1])
 		}
 	}
+	if len(pubkeys) == 0 && len(current.Pubkeys) > 0 {
+		slog.Error("newest kind-3 lists no follows; NOT applying it, keeping the previous follow list. "+
+			"This is usually a client publishing from an empty cache. Publish a corrected follow list to clear this",
+			"source", latest.ID, "created_at", int64(latest.CreatedAt),
+			"kept_source", current.Source, "kept_follows", len(current.Pubkeys))
+		return current, nil
+	}
 	sort.Strings(pubkeys)
 	next := FollowsSnapshot{Pubkeys: pubkeys, Source: latest.ID, CreatedAt: int64(latest.CreatedAt)}
+
+	if recordDepartures(departed, current.Pubkeys, next.Pubkeys, c.Now().Unix()) {
+		if err := writeJSONAtomic(c.departuresPath(), Departures{Departed: departed}); err != nil {
+			slog.Warn("write departures.json failed, keeping previous follows", "error", err)
+			return current, nil
+		}
+	}
 	if err := writeJSONAtomic(path, next); err != nil {
 		slog.Warn("write follows.json failed, keeping previous", "error", err)
 		return current, nil

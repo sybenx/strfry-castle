@@ -89,16 +89,21 @@ type RaidResult struct {
 // graceTTLDays (== OUTER_TTL_DAYS), independent of ttlDays: a smaller
 // per-raid override is aimed at aging out old stranger notes faster, never
 // at shortening someone's eviction grace (CLAUDE.md's grace-decoupling
-// rule). Streams the scan and batches deletes; never slurps.
-func RunRaid(ctx context.Context, scanner strfryScanner, cli strfryCLI, state *State, follows []string, ttlDays, graceTTLDays int, now int64, dryRun bool) (RaidResult, error) {
+// rule). departed (departures.json) holds unfollow times and gets the same
+// grace window as ledger evictions. Streams the scan and batches deletes;
+// never slurps.
+func RunRaid(ctx context.Context, scanner strfryScanner, cli strfryCLI, state *State, follows []string, departed map[string]int64, ttlDays, graceTTLDays int, now int64, dryRun bool) (RaidResult, error) {
 	citizens := make(map[string]bool)
 	for _, pk := range state.Citizens(follows) {
 		citizens[pk] = true
 	}
 	graceSeconds := int64(graceTTLDays) * 86400
 	inGrace := func(pk string) bool {
-		evictedAt, ok := state.Evicted[pk]
-		return ok && now-evictedAt < graceSeconds
+		if evictedAt, ok := state.Evicted[pk]; ok && now-evictedAt < graceSeconds {
+			return true
+		}
+		departedAt, ok := departed[pk]
+		return ok && now-departedAt < graceSeconds
 	}
 
 	cutoff := now - int64(ttlDays)*86400
@@ -159,11 +164,15 @@ func (c *Cycle) Raid(ctx context.Context, ttlDaysOverride *int, dryRun bool, sou
 	if err != nil {
 		return RaidResult{}, fmt.Errorf("raid: read follows: %w", err)
 	}
+	departed, err := readDepartures(c.departuresPath())
+	if err != nil {
+		return RaidResult{}, fmt.Errorf("raid: read departures: %w", err)
+	}
 
 	slog.Info("raid starting", "ttl_days", ttlDays, "dry_run", effectiveDryRun)
 
 	now := c.Now().Unix()
-	result, err := RunRaid(ctx, c.Scanner, c.CLI, state, follows.Pubkeys, ttlDays, c.OuterTTLDays, now, effectiveDryRun)
+	result, err := RunRaid(ctx, c.Scanner, c.CLI, state, follows.Pubkeys, departed, ttlDays, c.OuterTTLDays, now, effectiveDryRun)
 	if err != nil {
 		return RaidResult{}, err
 	}

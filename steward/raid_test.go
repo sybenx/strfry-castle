@@ -56,7 +56,7 @@ func TestRunRaid_CitizenAndElevatedSurvive(t *testing.T) {
 	cli := &fakeStrfryCLI{}
 
 	now := 100 * dayInSeconds
-	result, err := RunRaid(context.Background(), scanner, cli, state, follows, 30, 30, now, false)
+	result, err := RunRaid(context.Background(), scanner, cli, state, follows, nil, 30, 30, now, false)
 	if err != nil {
 		t.Fatalf("RunRaid: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestRunRaid_YoungerThanCutoffSurvives(t *testing.T) {
 	}}
 	cli := &fakeStrfryCLI{}
 
-	result, err := RunRaid(context.Background(), scanner, cli, state, nil, 30, 30, now, false)
+	result, err := RunRaid(context.Background(), scanner, cli, state, nil, nil, 30, 30, now, false)
 	if err != nil {
 		t.Fatalf("RunRaid: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestRunRaid_EvictedSurvivesGraceThenDies(t *testing.T) {
 	// Still inside the 30-day grace window (10 days after eviction).
 	cli := &fakeStrfryCLI{}
 	nowInsideGrace := evictedAt + 10*dayInSeconds
-	result, err := RunRaid(context.Background(), scanner, cli, state, nil, 30, 30, nowInsideGrace, false)
+	result, err := RunRaid(context.Background(), scanner, cli, state, nil, nil, 30, 30, nowInsideGrace, false)
 	if err != nil {
 		t.Fatalf("RunRaid (inside grace): %v", err)
 	}
@@ -121,7 +121,7 @@ func TestRunRaid_EvictedSurvivesGraceThenDies(t *testing.T) {
 	// Past the 30-day grace window.
 	cli2 := &fakeStrfryCLI{}
 	nowAfterGrace := evictedAt + 31*dayInSeconds
-	result2, err := RunRaid(context.Background(), scanner, cli2, state, nil, 30, 30, nowAfterGrace, false)
+	result2, err := RunRaid(context.Background(), scanner, cli2, state, nil, nil, 30, 30, nowAfterGrace, false)
 	if err != nil {
 		t.Fatalf("RunRaid (after grace): %v", err)
 	}
@@ -149,7 +149,7 @@ func TestRunRaid_GraceNeverFollowsOverride(t *testing.T) {
 	}}
 	cli := &fakeStrfryCLI{}
 
-	result, err := RunRaid(context.Background(), scanner, cli, state, nil, 3, 30, now, false)
+	result, err := RunRaid(context.Background(), scanner, cli, state, nil, nil, 3, 30, now, false)
 	if err != nil {
 		t.Fatalf("RunRaid: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestRunRaid_DryRunDeletesNothingReturnsNonzeroEvents(t *testing.T) {
 	}}
 	cli := &fakeStrfryCLI{}
 
-	result, err := RunRaid(context.Background(), scanner, cli, state, nil, 30, 30, now, true)
+	result, err := RunRaid(context.Background(), scanner, cli, state, nil, nil, 30, 30, now, true)
 	if err != nil {
 		t.Fatalf("RunRaid: %v", err)
 	}
@@ -361,5 +361,40 @@ func TestNextRaidTime_ComputesNextFromCron(t *testing.T) {
 	want := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC).Unix()
 	if *got != want {
 		t.Fatalf("expected next raid at %d, got %d", want, *got)
+	}
+}
+
+// TestRunRaid_DeparturesGraceAndEvictionUnchanged: an unfollowed pubkey gets
+// the same OUTER_TTL_DAYS grace as an evicted member, and passing a
+// departures map changes nothing about ledger-eviction grace.
+func TestRunRaid_DeparturesGraceAndEvictionUnchanged(t *testing.T) {
+	entries := []Entry{
+		{Verb: VerbInvite, Pubkey: "member1", InvitedBy: testOwner, Timestamp: -10},
+		{Verb: VerbRemove, Pubkey: "member1", Timestamp: 0},
+	}
+	state := buildRaidState(t, entries)
+	departed := map[string]int64{"unfollowed1": 0}
+	scanner := &fakeScanner{events: []fakeStoredEvent{
+		{Pubkey: "member1", CreatedAt: -100 * dayInSeconds},
+		{Pubkey: "unfollowed1", CreatedAt: -100 * dayInSeconds},
+		{Pubkey: "stranger1", CreatedAt: -100 * dayInSeconds},
+	}}
+
+	cli := &fakeStrfryCLI{}
+	result, err := RunRaid(context.Background(), scanner, cli, state, nil, departed, 3, 30, 10*dayInSeconds, false)
+	if err != nil {
+		t.Fatalf("RunRaid (inside grace): %v", err)
+	}
+	if got := deletedPubkeys(cli); result.Events != 1 || len(got) != 1 || got[0] != "stranger1" {
+		t.Fatalf("inside grace only the stranger dies (even with a 3-day override), got %d events, deletes %v", result.Events, got)
+	}
+
+	cli2 := &fakeStrfryCLI{}
+	result, err = RunRaid(context.Background(), scanner, cli2, state, nil, departed, 30, 30, 31*dayInSeconds, false)
+	if err != nil {
+		t.Fatalf("RunRaid (after grace): %v", err)
+	}
+	if got := deletedPubkeys(cli2); result.Events != 3 || len(got) != 3 {
+		t.Fatalf("after grace all three should be purged, got %d events, deletes %v", result.Events, got)
 	}
 }
