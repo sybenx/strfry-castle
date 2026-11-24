@@ -1,12 +1,12 @@
 # The Castle
 
 A sidecar for an existing [strfry](https://github.com/hoytech/strfry) relay
-that turns an open relay into a castle: permanent storage for the owner
-(**the Lord**) and everyone he elevates — an invite tree of trusted members
-(Pyramid-style, like fiatjaf's
-[Pyramid](https://github.com/fiatjaf/pyramid) relay), his follows, and his
-favorites and wards — plus open lands (**the Outer Lands**) where anyone
-may write, raided at the Lord's whim.
+that applies tiered retention. Events are kept permanently for the owner
+(**the Lord**), an invite tree of members (as in fiatjaf's
+[Pyramid](https://github.com/fiatjaf/pyramid) relay), the owner's follows,
+and pubkeys the owner has favorited or warded. Anyone else may still write
+(**the Outer Lands**), and their events are deleted at each raid once they
+are older than the TTL. See [Retention, in short](#retention-in-short).
 
 Two pieces, one container: **`steward`**, a single Go binary that runs the
 invite tree, retention, and a small signed HTTP API, and also serves
